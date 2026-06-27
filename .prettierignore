@@ -1,0 +1,9 @@
+node_modules
+dist
+build
+.turbo
+.expo
+pnpm-lock.yaml
+supabase/.branches
+supabase/.temp
+*.md

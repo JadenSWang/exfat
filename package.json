@@ -1,0 +1,28 @@
+{
+  "name": "workout-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ad-free iOS workout app (lifting). Monorepo: Expo app + Supabase backend.",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=11"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
+    "mobile": "pnpm --filter @workout/mobile",
+    "supabase": "pnpm dlx supabase"
+  },
+  "devDependencies": {
+    "eslint": "^9.13.0",
+    "prettier": "^3.3.3",
+    "turbo": "^2.5.0",
+    "typescript": "^5.6.0"
+  }
+}

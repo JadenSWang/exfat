@@ -1,0 +1,85 @@
+# Supabase local development configuration.
+# Docs: https://supabase.com/docs/guides/local-development/cli/config
+#
+# A string of the form "env(VAR_NAME)" is replaced with the value of the
+# environment variable VAR_NAME at runtime (used for the Apple bundle id below).
+
+project_id = "workout"
+
+[api]
+enabled = true
+# Port the local API gateway (PostgREST + GoTrue + Realtime + Storage) listens on.
+port = 54321
+# Schemas exposed via the auto-generated REST API.
+schemas = ["public"]
+# Extra schemas searched when resolving REST routes.
+extra_search_path = ["public", "extensions"]
+# Max rows returned by a single REST request.
+max_rows = 1000
+
+[db]
+# Port the local Postgres database listens on.
+port = 54322
+# Port used by `supabase db diff` to run the shadow database.
+shadow_port = 54320
+# Major Postgres version of the local database. Match your hosted project.
+major_version = 15
+
+[studio]
+enabled = true
+# Port Supabase Studio (the local dashboard) listens on.
+port = 54323
+api_url = "http://127.0.0.1:54321"
+
+# Email testing server. Captures outbound mail locally (Inbucket).
+[inbucket]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[auth]
+enabled = true
+# The site URL is the deep-link scheme for the native iOS app. Apple sign-in
+# and any auth redirects bounce back to the app through this scheme.
+site_url = "workout://"
+# Additional URLs permitted as redirect targets after auth flows.
+additional_redirect_urls = ["workout://", "workout://auth/callback"]
+# How long (seconds) an access token (JWT) is valid before it must be refreshed.
+jwt_expiry = 3600
+# Allow refresh tokens to be reused within this window (helps flaky mobile nets).
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+# This is Sign-in-with-Apple ONLY: no anonymous users, no manual signups.
+enable_signup = false
+enable_anonymous_sign_ins = false
+
+# Email auth is fully disabled — the app never collects passwords or emails.
+[auth.email]
+enable_signup = false
+enable_confirmations = false
+double_confirm_changes = false
+
+# Phone auth is disabled.
+[auth.sms]
+enable_signup = false
+
+# Sign in with Apple (native iOS).
+# The mobile app obtains an identity token via expo-apple-authentication and
+# exchanges it with supabase.auth.signInWithIdToken({ provider: 'apple' }).
+#
+# `client_id` is the audience of the Apple identity token. For NATIVE iOS
+# sign-in this is the app's bundle identifier (e.g. com.workout.app), injected
+# here from the APPLE_BUNDLE_ID environment variable.
+#
+# NOTE: On a HOSTED Supabase project the Apple provider secret (a JWT signed by
+# your Apple "Sign in with Apple" key / .p8) and the Service ID are configured
+# in the Supabase dashboard (Authentication -> Providers -> Apple). They are NOT
+# stored here and are not needed for verifying native identity tokens locally.
+[auth.external.apple]
+enabled = true
+client_id = "env(APPLE_BUNDLE_ID)"
+# secret is set in the hosted dashboard for web/Service-ID flows; left blank locally.
+secret = ""

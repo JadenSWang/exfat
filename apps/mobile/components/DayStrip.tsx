@@ -101,6 +101,7 @@ export function DayStrip({
             <DayRing
               key={date}
               date={date}
+              label={dayLabel(date, today)}
               slotWidth={interval}
               isSelected={date === selected}
               isToday={date === today}
@@ -117,6 +118,7 @@ export function DayStrip({
 
 function DayRing({
   date,
+  label,
   slotWidth,
   isSelected,
   isToday,
@@ -124,6 +126,7 @@ function DayRing({
   onPress,
 }: {
   date: string
+  label: string
   slotWidth: number
   isSelected: boolean
   isToday: boolean
@@ -141,8 +144,8 @@ function DayRing({
       onPress={onPress}
       style={[styles.day, { width: slotWidth }]}
     >
-      <Text style={[styles.weekday, isSelected && styles.weekdaySelected]}>
-        {WEEKDAY_LETTER.format(day)}
+      <Text style={[styles.weekday, isSelected && styles.weekdaySelected]} numberOfLines={1}>
+        {label}
       </Text>
       <View style={styles.ringWrap}>
         <Svg width={RING_SIZE} height={RING_SIZE}>

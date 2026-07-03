@@ -1,5 +1,5 @@
 import type { DailyGoals, DiaryItem, MealType } from '@workout/core'
-import type { Tables } from '@workout/supabase'
+import type { Tables, WeightUnit } from '@workout/supabase'
 
 /**
  * Sensible fallback targets used when the user has no saved goals yet or the
@@ -10,6 +10,28 @@ export const DEFAULT_GOALS: DailyGoals = {
   protein: 150,
   carbs: 200,
   fat: 65,
+}
+
+/**
+ * Suggest a daily calorie target from body weight: ~14 kcal per lb of body
+ * weight (a common maintenance rule of thumb), rounded to the nearest 50.
+ */
+export function suggestCalorieTarget(weight: number, unit: WeightUnit): number {
+  const lbs = unit === 'kg' ? weight * 2.20462 : weight
+  return Math.max(Math.round((lbs * 14) / 50) * 50, 1200)
+}
+
+/**
+ * Derive macro goals from a calorie target using a 30% protein / 40% carbs /
+ * 30% fat calorie split (4/4/9 kcal per gram).
+ */
+export function goalsFromCalories(calories: number): DailyGoals {
+  return {
+    calories,
+    protein: Math.round((calories * 0.3) / 4),
+    carbs: Math.round((calories * 0.4) / 4),
+    fat: Math.round((calories * 0.3) / 9),
+  }
 }
 
 /** The four meals in display order. */

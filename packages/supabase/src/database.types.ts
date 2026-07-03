@@ -16,6 +16,7 @@ export type Database = {
           id: string
           display_name: string | null
           default_unit: Database['public']['Enums']['weight_unit']
+          weight: number | null
           created_at: string
           updated_at: string
         }
@@ -23,6 +24,7 @@ export type Database = {
           id: string
           display_name?: string | null
           default_unit?: Database['public']['Enums']['weight_unit']
+          weight?: number | null
           created_at?: string
           updated_at?: string
         }
@@ -30,6 +32,7 @@ export type Database = {
           id?: string
           display_name?: string | null
           default_unit?: Database['public']['Enums']['weight_unit']
+          weight?: number | null
           created_at?: string
           updated_at?: string
         }

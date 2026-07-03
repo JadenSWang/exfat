@@ -11,6 +11,8 @@ export {
 
 export { signInWithApple, signOut } from './auth'
 
+export { getProfile, updateProfileWeight, type WeightUnit } from './profiles'
+
 export {
   estimateNutrition,
   logDiaryEntries,

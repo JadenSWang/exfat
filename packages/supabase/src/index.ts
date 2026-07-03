@@ -22,3 +22,10 @@ export {
   type NutritionEstimate,
   type DiaryEntryInput,
 } from './nutrition'
+
+export {
+  lookupBarcode,
+  submitBarcodeFood,
+  type BarcodeLookupResult,
+  type BarcodeSubmissionInput,
+} from './barcode'

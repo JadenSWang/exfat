@@ -93,3 +93,10 @@ secret = ""
 #   supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
 [functions.estimate-nutrition]
 verify_jwt = true
+
+# lookup-barcode resolves a scanned barcode: our foods library first, then
+# Open Food Facts (cached back into the library), else "not found" so the app
+# falls back to a crowdsourced submission. No extra secrets — it uses the
+# built-in SUPABASE_SERVICE_ROLE_KEY to write the global cache row.
+[functions.lookup-barcode]
+verify_jwt = true

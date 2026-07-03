@@ -22,7 +22,7 @@ import { defaultMealForNow, todayISODate } from '@/lib/nutrition'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/providers/auth'
 
-const ESTIMATE_NOTE = 'These are AI estimates. For exact values, scan a barcode (coming soon).'
+const ESTIMATE_NOTE = 'These are AI estimates. For exact values, scan a barcode.'
 
 export default function LogFoodScreen() {
   const router = useRouter()
@@ -165,8 +165,12 @@ export default function LogFoodScreen() {
           ) : null}
 
           <View style={styles.seams}>
-            <Text style={styles.seamsHeading}>More ways to log (coming soon)</Text>
-            <DisabledButton label="Scan barcode" />
+            <Text style={styles.seamsHeading}>More ways to log</Text>
+            <Button
+              label="Scan barcode"
+              variant="secondary"
+              onPress={() => router.push('/scan')}
+            />
             <DisabledButton label="Search database" />
           </View>
         </ScrollView>

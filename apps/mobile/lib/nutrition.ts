@@ -32,11 +32,16 @@ const GOAL_MULTIPLIER: Record<Goal, number> = {
  */
 const ACTIVITY_FACTOR = 1.45
 
-/** How each goal shifts maintenance calories: deficit, maintenance, surplus. */
+/**
+ * How each goal shifts maintenance (TDEE) calories. Tuned to be aggressive on
+ * the cut: `lose` is a hard deficit and `recomp` a mild one, while `bulk` stays
+ * a modest surplus. Calibrated against a 6'2"/205lb reference (~2000 lose /
+ * ~2500 recomp / ~3250 bulk around age 30).
+ */
 const GOAL_FACTOR: Record<Goal, number> = {
-  lose: 0.8,
-  recomp: 1.0,
-  bulk: 1.15,
+  lose: 0.7, // hard deficit
+  recomp: 0.88, // mild deficit — a slight cut, not pure maintenance
+  bulk: 1.15, // modest surplus
 }
 
 /** Round a raw kcal figure to the nearest 50, with a sane 1200 kcal floor. */

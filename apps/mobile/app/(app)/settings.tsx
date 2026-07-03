@@ -1,10 +1,19 @@
-import { updateProfileWeight, upsertNutritionGoals, type WeightUnit } from '@workout/supabase'
-import { useQueryClient } from '@tanstack/react-query'
-import { useRouter } from 'expo-router'
-import { useState } from 'react'
 import {
+  getNutritionGoals,
+  getProfile,
+  signOut,
+  updateProfileWeight,
+  upsertNutritionGoals,
+  type WeightUnit,
+} from '@workout/supabase'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useRouter } from 'expo-router'
+import { useEffect, useState } from 'react'
+import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -18,28 +27,51 @@ import { goalsFromCalories, suggestCalorieTarget, type Goal } from '@/lib/nutrit
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/providers/auth'
 
-export default function OnboardingScreen() {
+export default function SettingsScreen() {
   const router = useRouter()
   const queryClient = useQueryClient()
   const { user } = useAuth()
 
+  const profileQuery = useQuery({
+    queryKey: ['profile'],
+    queryFn: () => getProfile(supabase),
+  })
+  const goalsQuery = useQuery({
+    queryKey: ['nutrition-goals-row'],
+    queryFn: () => getNutritionGoals(supabase),
+  })
+
   const [weightText, setWeightText] = useState('')
   const [unit, setUnit] = useState<WeightUnit>('lb')
   const [goal, setGoal] = useState<Goal>('recomp')
-  // Null while the user hasn't touched the target — track the suggestion.
+  // Null while untouched — track the suggestion from weight + goal. Seeded
+  // with the saved target so we don't clobber a hand-picked number.
   const [calorieOverride, setCalorieOverride] = useState<number | null>(null)
+  const [hydrated, setHydrated] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Prefill the form once both queries settle.
+  useEffect(() => {
+    if (hydrated || profileQuery.isLoading || goalsQuery.isLoading) return
+    const profile = profileQuery.data
+    if (profile?.weight) {
+      setWeightText(String(profile.weight))
+      setUnit(profile.default_unit)
+    }
+    if (goalsQuery.data) setCalorieOverride(goalsQuery.data.calories)
+    setHydrated(true)
+  }, [hydrated, profileQuery.isLoading, profileQuery.data, goalsQuery.isLoading, goalsQuery.data])
 
   const weight = Number.parseFloat(weightText)
   const hasWeight = Number.isFinite(weight) && weight > 0
   const suggested = hasWeight ? suggestCalorieTarget(weight, unit, goal) : null
   const calories = calorieOverride ?? suggested
 
-  async function handleContinue() {
+  async function handleSave() {
     if (!hasWeight || !calories || isSaving) return
     if (!user) {
-      setError('You need to be signed in to continue.')
+      setError('You need to be signed in to save.')
       return
     }
     setError(null)
@@ -50,12 +82,23 @@ export default function OnboardingScreen() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['profile'] }),
         queryClient.invalidateQueries({ queryKey: ['nutrition-goals'] }),
+        queryClient.invalidateQueries({ queryKey: ['nutrition-goals-row'] }),
       ])
-      router.replace('/')
+      router.back()
     } catch {
-      setError('Could not save your profile — is the backend running?')
+      setError('Could not save — is the backend running?')
       setIsSaving(false)
     }
+  }
+
+  if (!hydrated) {
+    return (
+      <Screen style={styles.screen}>
+        <View style={styles.loading}>
+          <ActivityIndicator color="#208AEF" />
+        </View>
+      </Screen>
+    )
   }
 
   return (
@@ -65,13 +108,6 @@ export default function OnboardingScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.content}>
-          <View style={styles.header}>
-            <Text style={styles.title}>Welcome</Text>
-            <Text style={styles.subtitle}>
-              Two questions and you’re in — we’ll figure out the rest.
-            </Text>
-          </View>
-
           <View style={styles.field}>
             <Text style={styles.label}>Your weight</Text>
             <View style={styles.weightRow}>
@@ -85,7 +121,6 @@ export default function OnboardingScreen() {
                 keyboardType="decimal-pad"
                 placeholder={unit === 'lb' ? '160' : '73'}
                 placeholderTextColor="#AAA"
-                autoFocus
               />
               <UnitToggle
                 unit={unit}
@@ -125,7 +160,7 @@ export default function OnboardingScreen() {
                 <Text style={styles.targetUnit}>kcal</Text>
               </View>
               <Text style={styles.targetHint}>
-                Suggested from your weight and goal — tweak it if you know better.
+                Change your weight or goal to get a fresh suggestion, or type your own number.
               </Text>
             </View>
           ) : null}
@@ -133,11 +168,15 @@ export default function OnboardingScreen() {
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <Button
-            label="Start tracking"
-            onPress={handleContinue}
+            label="Save"
+            onPress={handleSave}
             loading={isSaving}
             disabled={!hasWeight || !calories}
           />
+
+          <Pressable accessibilityRole="button" onPress={() => signOut(supabase)} hitSlop={8}>
+            <Text style={styles.signOut}>Sign out</Text>
+          </Pressable>
         </View>
       </KeyboardAvoidingView>
     </Screen>
@@ -151,23 +190,15 @@ const styles = StyleSheet.create({
   flex: {
     flex: 1,
   },
+  loading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   content: {
     flex: 1,
     gap: 24,
     paddingTop: 24,
-  },
-  header: {
-    gap: 8,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#111',
-  },
-  subtitle: {
-    fontSize: 15,
-    color: '#999',
-    lineHeight: 21,
   },
   field: {
     gap: 8,
@@ -232,5 +263,11 @@ const styles = StyleSheet.create({
     color: '#d00',
     fontSize: 14,
     lineHeight: 20,
+  },
+  signOut: {
+    fontSize: 15,
+    color: '#d00',
+    fontWeight: '600',
+    textAlign: 'center',
   },
 })

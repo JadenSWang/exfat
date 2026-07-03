@@ -12,13 +12,24 @@ export const DEFAULT_GOALS: DailyGoals = {
   fat: 65,
 }
 
+/** What the user wants out of their calorie target. */
+export type Goal = 'lose' | 'recomp' | 'bulk'
+
+/** kcal per lb of body weight, per goal (~14 kcal/lb is maintenance). */
+const GOAL_MULTIPLIER: Record<Goal, number> = {
+  lose: 10, // aggressive deficit
+  recomp: 14, // maintenance
+  bulk: 18, // aggressive surplus
+}
+
 /**
- * Suggest a daily calorie target from body weight: ~14 kcal per lb of body
- * weight (a common maintenance rule of thumb), rounded to the nearest 50.
+ * Suggest a daily calorie target from body weight and goal: the goal picks a
+ * kcal-per-lb multiplier around the ~14 kcal/lb maintenance rule of thumb,
+ * rounded to the nearest 50.
  */
-export function suggestCalorieTarget(weight: number, unit: WeightUnit): number {
+export function suggestCalorieTarget(weight: number, unit: WeightUnit, goal: Goal = 'recomp'): number {
   const lbs = unit === 'kg' ? weight * 2.20462 : weight
-  return Math.max(Math.round((lbs * 14) / 50) * 50, 1200)
+  return Math.max(Math.round((lbs * GOAL_MULTIPLIER[goal]) / 50) * 50, 1200)
 }
 
 /**

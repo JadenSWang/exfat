@@ -5,6 +5,7 @@ export default function AppLayout() {
     <Stack>
       <Stack.Screen name="index" options={{ title: 'Today' }} />
       <Stack.Screen name="log" options={{ title: 'Log food', presentation: 'modal' }} />
+      <Stack.Screen name="scan" options={{ title: 'Scan barcode', presentation: 'modal' }} />
     </Stack>
   )
 }

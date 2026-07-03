@@ -42,6 +42,12 @@ const config: ExpoConfig & { newArchEnabled?: boolean } = {
     'expo-secure-store',
     'expo-apple-authentication',
     [
+      'expo-camera',
+      {
+        cameraPermission: 'exFat uses the camera to scan food barcodes.',
+      },
+    ],
+    [
       'expo-splash-screen',
       {
         backgroundColor: '#208AEF',

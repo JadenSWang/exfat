@@ -348,6 +348,62 @@ export type Database = {
           },
         ]
       }
+      barcode_submissions: {
+        Row: {
+          id: string
+          user_id: string
+          barcode: string
+          name: string
+          brand: string | null
+          serving_qty: number
+          serving_unit: Database['public']['Enums']['food_unit']
+          calories: number
+          protein: number
+          carbs: number
+          fat: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          barcode: string
+          name: string
+          brand?: string | null
+          serving_qty?: number
+          serving_unit?: Database['public']['Enums']['food_unit']
+          calories?: number
+          protein?: number
+          carbs?: number
+          fat?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          barcode?: string
+          name?: string
+          brand?: string | null
+          serving_qty?: number
+          serving_unit?: Database['public']['Enums']['food_unit']
+          calories?: number
+          protein?: number
+          carbs?: number
+          fat?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'barcode_submissions_user_id_fkey'
+            columns: ['user_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       nutrition_goals: {
         Row: {
           user_id: string

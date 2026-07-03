@@ -1,4 +1,4 @@
-import { sumMacros, type EstimatedFoodItem, type MealType } from '@workout/core'
+import { sumMacros, type EstimatedFoodItem } from '@workout/core'
 import { logDiaryEntries, type DiaryEntryInput } from '@workout/supabase'
 import { useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'expo-router'
@@ -18,7 +18,7 @@ import { Button } from '@/components/Button'
 import { EstimateTag } from '@/components/EstimateTag'
 import { Screen } from '@/components/Screen'
 import { estimateNutrition } from '@/lib/estimate'
-import { MEAL_LABELS, MEAL_ORDER, defaultMealForNow, todayISODate } from '@/lib/nutrition'
+import { defaultMealForNow, todayISODate } from '@/lib/nutrition'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/providers/auth'
 
@@ -30,7 +30,6 @@ export default function LogFoodScreen() {
   const { user } = useAuth()
 
   const [text, setText] = useState('')
-  const [meal, setMeal] = useState<MealType>(defaultMealForNow())
   const [items, setItems] = useState<EstimatedFoodItem[] | null>(null)
   const [isEstimating, setIsEstimating] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -76,6 +75,8 @@ export default function LogFoodScreen() {
     setIsSaving(true)
     try {
       const entryDate = todayISODate()
+      // Meal is implied from the time of day — we don't ask.
+      const meal = defaultMealForNow()
       const entries: DiaryEntryInput[] = items.map((item) => ({
         entryDate,
         meal,
@@ -124,27 +125,6 @@ export default function LogFoodScreen() {
             />
           </View>
 
-          <View style={styles.field}>
-            <Text style={styles.label}>Meal</Text>
-            <View style={styles.mealPicker}>
-              {MEAL_ORDER.map((option) => {
-                const selected = option === meal
-                return (
-                  <Pressable
-                    key={option}
-                    accessibilityRole="button"
-                    onPress={() => setMeal(option)}
-                    style={[styles.mealChip, selected && styles.mealChipSelected]}
-                  >
-                    <Text style={[styles.mealChipText, selected && styles.mealChipTextSelected]}>
-                      {MEAL_LABELS[option]}
-                    </Text>
-                  </Pressable>
-                )
-              })}
-            </View>
-          </View>
-
           <Button
             label="Estimate"
             onPress={handleEstimate}
@@ -180,11 +160,7 @@ export default function LogFoodScreen() {
                 </View>
               ) : null}
 
-              <Button
-                label={`Save to diary (${MEAL_LABELS[meal]})`}
-                onPress={handleSave}
-                loading={isSaving}
-              />
+              <Button label="Save to diary" onPress={handleSave} loading={isSaving} />
             </View>
           ) : null}
 
@@ -322,31 +298,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#111',
     textAlignVertical: 'top',
-  },
-  mealPicker: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  mealChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#E4E4E9',
-    backgroundColor: '#fff',
-  },
-  mealChipSelected: {
-    backgroundColor: '#208AEF',
-    borderColor: '#208AEF',
-  },
-  mealChipText: {
-    fontSize: 14,
-    color: '#666',
-    fontWeight: '600',
-  },
-  mealChipTextSelected: {
-    color: '#fff',
   },
   error: {
     color: '#d00',

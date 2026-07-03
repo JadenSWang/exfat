@@ -6,12 +6,7 @@ import {
   type DiaryItem,
   type MealType,
 } from '@workout/core'
-import {
-  deleteDiaryEntry,
-  getDailyCalorieTotals,
-  getDiaryEntries,
-  getNutritionGoals,
-} from '@workout/supabase'
+import { deleteDiaryEntry, getDiaryEntries, getNutritionGoals } from '@workout/supabase'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'expo-router'
 import { useState } from 'react'
@@ -25,7 +20,7 @@ import {
   View,
 } from 'react-native'
 
-import { DAY_STRIP_LENGTH, DayStrip } from '@/components/DayStrip'
+import { DayStrip } from '@/components/DayStrip'
 import { EstimateTag } from '@/components/EstimateTag'
 import { MacroBar } from '@/components/MacroBar'
 import { Screen } from '@/components/Screen'
@@ -35,7 +30,6 @@ import {
   MEAL_ORDER,
   parseISODate,
   rowToDiaryItem,
-  shiftISODate,
   todayISODate,
 } from '@/lib/nutrition'
 import { dismissPendingLog, usePendingLogs, type PendingLog } from '@/lib/pendingLogs'
@@ -88,34 +82,11 @@ function useDiaryDay(date: string) {
   }
 }
 
-/** Calories consumed per day over the strip's window, for the day rings. */
-function useCalorieTotals(today: string) {
-  const start = shiftISODate(today, -(DAY_STRIP_LENGTH - 1))
-  const query = useQuery({
-    queryKey: ['diary', 'totals', today],
-    queryFn: async (): Promise<Record<string, number>> => {
-      try {
-        return await getDailyCalorieTotals(supabase, start, today)
-      } catch {
-        return {}
-      }
-    },
-  })
-  return query.data ?? {}
-}
-
-function dayTitle(date: string, today: string): string {
-  if (date === today) return 'Today'
-  if (date === shiftISODate(today, -1)) return 'Yesterday'
-  return PRETTY_DATE.format(parseISODate(date)).split(',')[0]
-}
-
 export default function DiaryScreen() {
   const today = todayISODate()
   const [date, setDate] = useState(today)
   const isToday = date === today
   const { goals, items } = useDiaryDay(date)
-  const calorieTotals = useCalorieTotals(today)
   const pendingLogs = usePendingLogs()
 
   const consumed = sumMacros(items)
@@ -129,10 +100,7 @@ export default function DiaryScreen() {
     <Screen style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.headerRow}>
-          <View>
-            <Text style={styles.today}>{dayTitle(date, today)}</Text>
-            <Text style={styles.date}>{PRETTY_DATE.format(parseISODate(date))}</Text>
-          </View>
+          <Text style={styles.date}>{PRETTY_DATE.format(parseISODate(date))}</Text>
           <Link href="/settings" asChild>
             <Pressable accessibilityRole="button" hitSlop={8}>
               <Text style={styles.settingsLink}>Settings</Text>
@@ -140,12 +108,7 @@ export default function DiaryScreen() {
           </Link>
         </View>
 
-        <DayStrip
-          selected={date}
-          onSelect={setDate}
-          calorieTotals={calorieTotals}
-          calorieGoal={goals.calories}
-        />
+        <DayStrip selected={date} onSelect={setDate} />
 
         <View style={styles.summaryCard}>
           <View style={styles.calorieHeader}>
@@ -317,12 +280,7 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  today: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#111',
+    alignItems: 'center',
   },
   date: {
     fontSize: 15,

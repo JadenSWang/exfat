@@ -19,7 +19,6 @@ export {
   updateDiaryEntryNutrition,
   deleteDiaryEntry,
   getDiaryEntries,
-  getDailyCalorieTotals,
   getNutritionGoals,
   upsertNutritionGoals,
   type NutritionEstimate,

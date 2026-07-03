@@ -148,28 +148,6 @@ export async function getDiaryEntries(
 }
 
 /**
- * Sum calories per day over an inclusive `entry_date` range. Days with no
- * entries are absent from the result.
- */
-export async function getDailyCalorieTotals(
-  client: WorkoutSupabaseClient,
-  startDate: string,
-  endDate: string,
-): Promise<Record<string, number>> {
-  const { data, error } = await client
-    .from('diary_entries')
-    .select('entry_date, calories')
-    .gte('entry_date', startDate)
-    .lte('entry_date', endDate)
-  if (error) throw error
-  const totals: Record<string, number> = {}
-  for (const row of data ?? []) {
-    totals[row.entry_date] = (totals[row.entry_date] ?? 0) + row.calories
-  }
-  return totals
-}
-
-/**
  * Fetch the current user's nutrition goals, or `null` if they haven't set any.
  */
 export async function getNutritionGoals(

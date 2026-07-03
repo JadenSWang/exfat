@@ -4,25 +4,22 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  View,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native'
-import Svg, { Circle } from 'react-native-svg'
 
 import { parseISODate, shiftISODate, todayISODate } from '@/lib/nutrition'
 
 /** How many trailing days the strip shows, including today. */
 export const DAY_STRIP_LENGTH = 14
 
-const RING_SIZE = 64
-const RING_STROKE = 4
-const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
+const MONTH_DAY = new Intl.DateTimeFormat('en-US', {
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+})
 
-const MONTH_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' })
-
-/** "Today", "Yesterday", or a short date like "Jun 30". */
+/** "Today", "Yesterday", or a short date like "Wed, Jul 1". */
 function dayLabel(date: string, today: string): string {
   if (date === today) return 'Today'
   if (date === shiftISODate(today, -1)) return 'Yesterday'
@@ -30,22 +27,16 @@ function dayLabel(date: string, today: string): string {
 }
 
 /**
- * Oura-style day carousel: the selected day sits centered with its neighbors
- * half-peeking from the screen edges; swiping snaps day-by-day and selection
- * follows the centered day. Each day is a ring filled by that day's calories
- * vs. goal.
+ * Oura-style day carousel of plain word labels: the selected day sits
+ * centered with its neighbors peeking from the screen edges; swiping snaps
+ * day-by-day and selection follows the centered day.
  */
 export function DayStrip({
   selected,
   onSelect,
-  calorieTotals,
-  calorieGoal,
 }: {
   selected: string
   onSelect: (date: string) => void
-  /** Map of `YYYY-MM-DD` → calories consumed that day. */
-  calorieTotals: Record<string, number>
-  calorieGoal: number
 }) {
   const today = todayISODate()
   const days = Array.from({ length: DAY_STRIP_LENGTH }, (_, i) =>
@@ -55,8 +46,7 @@ export function DayStrip({
   const [width, setWidth] = useState(0)
 
   // Slot geometry: each day occupies half the strip's width, so with the
-  // selected day centered, its neighbors' centers land exactly on the screen
-  // edges (half showing) — matching Oura's carousel.
+  // selected day centered, its neighbors' centers land on the screen edges.
   const interval = width / 2
   const sidePadding = width / 4
 
@@ -98,89 +88,24 @@ export function DayStrip({
     >
       {width > 0
         ? days.map((date, index) => (
-            <DayRing
+            <Pressable
               key={date}
-              date={date}
-              label={dayLabel(date, today)}
-              slotWidth={interval}
-              isSelected={date === selected}
-              isToday={date === today}
-              progress={
-                calorieGoal > 0 ? Math.min((calorieTotals[date] ?? 0) / calorieGoal, 1) : 0
-              }
+              accessibilityRole="button"
+              accessibilityLabel={`View ${date}`}
+              accessibilityState={{ selected: date === selected }}
               onPress={() => selectDay(index)}
-            />
+              style={[styles.day, { width: interval }]}
+            >
+              <Text
+                style={[styles.label, date === selected && styles.labelSelected]}
+                numberOfLines={1}
+              >
+                {dayLabel(date, today)}
+              </Text>
+            </Pressable>
           ))
         : null}
     </ScrollView>
-  )
-}
-
-function DayRing({
-  date,
-  label,
-  slotWidth,
-  isSelected,
-  isToday,
-  progress,
-  onPress,
-}: {
-  date: string
-  label: string
-  slotWidth: number
-  isSelected: boolean
-  isToday: boolean
-  progress: number
-  onPress: () => void
-}) {
-  const day = parseISODate(date)
-  const ringColor = progress > 0 ? '#208AEF' : 'transparent'
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`View ${date}`}
-      accessibilityState={{ selected: isSelected }}
-      onPress={onPress}
-      style={[styles.day, { width: slotWidth }]}
-    >
-      <Text style={[styles.weekday, isSelected && styles.weekdaySelected]} numberOfLines={1}>
-        {label}
-      </Text>
-      <View style={styles.ringWrap}>
-        <Svg width={RING_SIZE} height={RING_SIZE}>
-          <Circle
-            cx={RING_SIZE / 2}
-            cy={RING_SIZE / 2}
-            r={RING_RADIUS}
-            stroke="#E4E4E9"
-            strokeWidth={RING_STROKE}
-            fill={isSelected ? '#208AEF' : 'transparent'}
-          />
-          <Circle
-            cx={RING_SIZE / 2}
-            cy={RING_SIZE / 2}
-            r={RING_RADIUS}
-            stroke={ringColor}
-            strokeWidth={RING_STROKE}
-            strokeLinecap="round"
-            fill="transparent"
-            strokeDasharray={RING_CIRCUMFERENCE}
-            strokeDashoffset={RING_CIRCUMFERENCE * (1 - progress)}
-            transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
-          />
-        </Svg>
-        <Text
-          style={[
-            styles.dayNumber,
-            isToday && !isSelected && styles.dayNumberToday,
-            isSelected && styles.dayNumberSelected,
-          ]}
-        >
-          {day.getDate()}
-        </Text>
-      </View>
-    </Pressable>
   )
 }
 
@@ -192,33 +117,17 @@ const styles = StyleSheet.create({
   },
   day: {
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 4,
-  },
-  weekday: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#999',
-  },
-  weekdaySelected: {
-    color: '#208AEF',
-  },
-  ringWrap: {
-    width: RING_SIZE,
-    height: RING_SIZE,
-    alignItems: 'center',
     justifyContent: 'center',
+    paddingVertical: 8,
   },
-  dayNumber: {
-    position: 'absolute',
-    fontSize: 20,
-    fontWeight: '700',
+  label: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#BBB',
+  },
+  labelSelected: {
+    fontSize: 17,
+    fontWeight: '800',
     color: '#111',
-  },
-  dayNumberToday: {
-    color: '#208AEF',
-  },
-  dayNumberSelected: {
-    color: '#fff',
   },
 })

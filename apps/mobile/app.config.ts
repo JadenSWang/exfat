@@ -11,9 +11,9 @@ import type { ExpoConfig } from 'expo/config'
  * type to keep it explicit and typechecked.
  */
 const config: ExpoConfig & { newArchEnabled?: boolean } = {
-  name: 'Workout',
-  slug: 'workout',
-  scheme: 'workout',
+  name: 'exFat',
+  slug: 'exfat',
+  scheme: 'exfat',
   version: '0.0.0',
   orientation: 'portrait',
   icon: './assets/images/icon.png',

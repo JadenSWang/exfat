@@ -11,7 +11,8 @@
     "db:types": "supabase gen types typescript --local > src/database.types.ts"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.0"
+    "@supabase/supabase-js": "^2.45.0",
+    "@workout/core": "workspace:*"
   },
   "devDependencies": {
     "@workout/tsconfig": "workspace:*",

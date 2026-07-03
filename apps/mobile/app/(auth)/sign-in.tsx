@@ -2,12 +2,14 @@ import * as AppleAuthentication from 'expo-apple-authentication'
 import * as Crypto from 'expo-crypto'
 import { signInWithApple } from '@workout/supabase'
 import { useEffect, useState } from 'react'
-import { StyleSheet, Text, View } from 'react-native'
+import { Pressable, StyleSheet, Text, View } from 'react-native'
 
 import { Screen } from '@/components/Screen'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/providers/auth'
 
 export default function SignInScreen() {
+  const { devSignIn } = useAuth()
   const [isAppleAvailable, setIsAppleAvailable] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -65,8 +67,8 @@ export default function SignInScreen() {
   return (
     <Screen style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Workout</Text>
-        <Text style={styles.subtitle}>Track your lifts. No ads. Ever.</Text>
+        <Text style={styles.title}>exFat</Text>
+        <Text style={styles.subtitle}>Track what you eat. No ads. Ever.</Text>
       </View>
 
       <View style={styles.footer}>
@@ -82,6 +84,11 @@ export default function SignInScreen() {
           <Text style={styles.unavailable}>Apple sign-in is not available on this device.</Text>
         )}
         {error ? <Text style={styles.error}>{error}</Text> : null}
+        {__DEV__ ? (
+          <Pressable onPress={devSignIn} style={styles.devSkip}>
+            <Text style={styles.devSkipText}>Skip sign-in (dev preview)</Text>
+          </Pressable>
+        ) : null}
       </View>
     </Screen>
   )
@@ -124,5 +131,14 @@ const styles = StyleSheet.create({
   error: {
     color: '#d00',
     textAlign: 'center',
+  },
+  devSkip: {
+    paddingVertical: 8,
+  },
+  devSkipText: {
+    color: '#999',
+    textAlign: 'center',
+    fontSize: 14,
+    textDecorationLine: 'underline',
   },
 })

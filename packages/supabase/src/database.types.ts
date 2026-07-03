@@ -217,6 +217,172 @@ export type Database = {
           },
         ]
       }
+      foods: {
+        Row: {
+          id: string
+          name: string
+          brand: string | null
+          source: Database['public']['Enums']['food_source']
+          barcode: string | null
+          serving_qty: number
+          serving_unit: Database['public']['Enums']['food_unit']
+          calories: number
+          protein: number
+          carbs: number
+          fat: number
+          owner_id: string | null
+          verified: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          brand?: string | null
+          source?: Database['public']['Enums']['food_source']
+          barcode?: string | null
+          serving_qty?: number
+          serving_unit?: Database['public']['Enums']['food_unit']
+          calories?: number
+          protein?: number
+          carbs?: number
+          fat?: number
+          owner_id?: string | null
+          verified?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          name?: string
+          brand?: string | null
+          source?: Database['public']['Enums']['food_source']
+          barcode?: string | null
+          serving_qty?: number
+          serving_unit?: Database['public']['Enums']['food_unit']
+          calories?: number
+          protein?: number
+          carbs?: number
+          fat?: number
+          owner_id?: string | null
+          verified?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'foods_owner_id_fkey'
+            columns: ['owner_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      diary_entries: {
+        Row: {
+          id: string
+          user_id: string
+          entry_date: string
+          meal: Database['public']['Enums']['meal_type']
+          description: string
+          quantity: number
+          unit: Database['public']['Enums']['food_unit']
+          calories: number
+          protein: number
+          carbs: number
+          fat: number
+          source: Database['public']['Enums']['food_source']
+          is_estimate: boolean
+          food_id: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          entry_date?: string
+          meal?: Database['public']['Enums']['meal_type']
+          description: string
+          quantity?: number
+          unit?: Database['public']['Enums']['food_unit']
+          calories?: number
+          protein?: number
+          carbs?: number
+          fat?: number
+          source?: Database['public']['Enums']['food_source']
+          is_estimate?: boolean
+          food_id?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          entry_date?: string
+          meal?: Database['public']['Enums']['meal_type']
+          description?: string
+          quantity?: number
+          unit?: Database['public']['Enums']['food_unit']
+          calories?: number
+          protein?: number
+          carbs?: number
+          fat?: number
+          source?: Database['public']['Enums']['food_source']
+          is_estimate?: boolean
+          food_id?: string | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'diary_entries_user_id_fkey'
+            columns: ['user_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'diary_entries_food_id_fkey'
+            columns: ['food_id']
+            isOneToOne: false
+            referencedRelation: 'foods'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      nutrition_goals: {
+        Row: {
+          user_id: string
+          calories: number
+          protein: number
+          carbs: number
+          fat: number
+          updated_at: string
+        }
+        Insert: {
+          user_id: string
+          calories?: number
+          protein?: number
+          carbs?: number
+          fat?: number
+          updated_at?: string
+        }
+        Update: {
+          user_id?: string
+          calories?: number
+          protein?: number
+          carbs?: number
+          fat?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'nutrition_goals_user_id_fkey'
+            columns: ['user_id']
+            isOneToOne: true
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -250,6 +416,9 @@ export type Database = {
         | 'band'
         | 'other'
       exercise_category: 'compound' | 'isolation'
+      meal_type: 'breakfast' | 'lunch' | 'dinner' | 'snack'
+      food_source: 'ai_estimate' | 'barcode' | 'database' | 'manual'
+      food_unit: 'g' | 'oz' | 'ml' | 'tbsp' | 'tsp' | 'cup' | 'piece' | 'serving'
     }
     CompositeTypes: {
       [_ in never]: never

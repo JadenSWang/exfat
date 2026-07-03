@@ -83,3 +83,13 @@ enabled = true
 client_id = "env(APPLE_BUNDLE_ID)"
 # secret is set in the hosted dashboard for web/Service-ID flows; left blank locally.
 secret = ""
+
+# Edge Functions.
+# estimate-nutrition turns a free-text meal into AI calorie/macro estimates via
+# Claude. verify_jwt = true rejects unauthenticated calls at the gateway; the
+# function ALSO resolves the caller with supabase.auth.getUser() as defense in
+# depth. The Anthropic key is server-side only — set it as a secret, never in
+# this file or client code:
+#   supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+[functions.estimate-nutrition]
+verify_jwt = true

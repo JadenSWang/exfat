@@ -10,3 +10,13 @@ export {
 } from './client'
 
 export { signInWithApple, signOut } from './auth'
+
+export {
+  estimateNutrition,
+  logDiaryEntries,
+  getDiaryEntries,
+  getNutritionGoals,
+  upsertNutritionGoals,
+  type NutritionEstimate,
+  type DiaryEntryInput,
+} from './nutrition'

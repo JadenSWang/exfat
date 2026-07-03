@@ -17,7 +17,8 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
     "mobile": "pnpm --filter @workout/mobile",
-    "supabase": "pnpm dlx supabase"
+    "supabase": "pnpm dlx supabase",
+    "estimator": "node services/estimator/server.mjs"
   },
   "devDependencies": {
     "eslint": "^9.13.0",

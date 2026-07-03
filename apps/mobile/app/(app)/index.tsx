@@ -1,71 +1,343 @@
-import { estimateOneRepMax, totalVolume, type WorkoutSet } from '@workout/core'
-import { signOut } from '@workout/supabase'
-import { StyleSheet, Text, View } from 'react-native'
+import {
+  groupByMeal,
+  macroCaloriePercentages,
+  remainingMacros,
+  sumMacros,
+  type DiaryItem,
+  type MealType,
+} from '@workout/core'
+import { getDiaryEntries, getNutritionGoals, signOut } from '@workout/supabase'
+import { useQuery } from '@tanstack/react-query'
+import { Link } from 'expo-router'
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 
-import { Button } from '@/components/Button'
+import { EstimateTag } from '@/components/EstimateTag'
+import { MacroBar } from '@/components/MacroBar'
 import { Screen } from '@/components/Screen'
+import {
+  DEFAULT_GOALS,
+  MEAL_LABELS,
+  MEAL_ORDER,
+  rowToDiaryItem,
+  todayISODate,
+} from '@/lib/nutrition'
 import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/providers/auth'
 
-// Sample data so the cross-package import from @workout/core is actually
-// exercised (and therefore typechecked) at the call site.
-const sampleSets: WorkoutSet[] = [
-  { weight: 100, reps: 5, unit: 'kg', type: 'normal' },
-  { weight: 100, reps: 5, unit: 'kg', type: 'normal' },
-  { weight: 60, reps: 8, unit: 'kg', type: 'warmup' },
-]
+const PRETTY_DATE = new Intl.DateTimeFormat('en-US', {
+  weekday: 'long',
+  month: 'long',
+  day: 'numeric',
+})
 
-const estimatedOneRepMax = estimateOneRepMax(100, 5)
-const sessionVolume = totalVolume(sampleSets)
+/** Load today's goals + entries. Resilient: any failure falls back to defaults. */
+function useToday() {
+  const date = todayISODate()
 
-export default function WorkoutsHomeScreen() {
-  const { user } = useAuth()
+  const goalsQuery = useQuery({
+    queryKey: ['nutrition-goals'],
+    queryFn: async () => {
+      try {
+        const row = await getNutritionGoals(supabase)
+        if (!row) return DEFAULT_GOALS
+        return {
+          calories: row.calories,
+          protein: row.protein,
+          carbs: row.carbs,
+          fat: row.fat,
+        }
+      } catch {
+        // No backend / no project yet — degrade gracefully to defaults.
+        return DEFAULT_GOALS
+      }
+    },
+  })
+
+  const entriesQuery = useQuery({
+    queryKey: ['diary', date],
+    queryFn: async (): Promise<DiaryItem[]> => {
+      try {
+        const rows = await getDiaryEntries(supabase, date)
+        return rows.map(rowToDiaryItem)
+      } catch {
+        // Query can fail against a placeholder client; render the empty state.
+        return []
+      }
+    },
+  })
+
+  return {
+    goals: goalsQuery.data ?? DEFAULT_GOALS,
+    items: entriesQuery.data ?? [],
+    isLoading: entriesQuery.isLoading || goalsQuery.isLoading,
+  }
+}
+
+export default function DiaryScreen() {
+  const { goals, items } = useToday()
+
+  const consumed = sumMacros(items)
+  const remaining = remainingMacros(goals, consumed)
+  const macroSplit = macroCaloriePercentages(consumed)
+  const caloriePct = goals.calories > 0 ? Math.min(consumed.calories / goals.calories, 1) : 0
+  const byMeal = groupByMeal(items)
+  const hasEntries = items.length > 0
 
   async function handleSignOut() {
     await signOut(supabase)
   }
 
   return (
-    <Screen>
-      <View style={styles.section}>
-        <Text style={styles.heading}>Signed in</Text>
-        <Text style={styles.value}>{user?.email ?? 'No email on file'}</Text>
-        <Text style={styles.muted}>id: {user?.id ?? 'unknown'}</Text>
-      </View>
+    <Screen style={styles.screen}>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <View style={styles.headerRow}>
+          <View>
+            <Text style={styles.today}>Today</Text>
+            <Text style={styles.date}>{PRETTY_DATE.format(new Date())}</Text>
+          </View>
+          <Pressable accessibilityRole="button" onPress={handleSignOut} hitSlop={8}>
+            <Text style={styles.signOut}>Sign out</Text>
+          </Pressable>
+        </View>
 
-      <View style={styles.section}>
-        <Text style={styles.heading}>Sample metrics (@workout/core)</Text>
-        <Text style={styles.value}>Est. 1RM @ 100kg x 5: {estimatedOneRepMax.toFixed(1)} kg</Text>
-        <Text style={styles.value}>Session volume: {sessionVolume.toFixed(0)} kg</Text>
-      </View>
+        <View style={styles.summaryCard}>
+          <View style={styles.calorieHeader}>
+            <Text style={styles.calorieValue}>{Math.round(consumed.calories)}</Text>
+            <Text style={styles.calorieUnit}>/ {Math.round(goals.calories)} kcal</Text>
+          </View>
+          <View style={styles.track}>
+            <View style={[styles.fill, { width: `${caloriePct * 100}%` }]} />
+          </View>
+          <Text style={styles.calorieRemaining}>
+            {Math.round(Math.max(remaining.calories, 0))} kcal left
+            {consumed.calories > 0
+              ? ` · ${macroSplit.protein}P / ${macroSplit.carbs}C / ${macroSplit.fat}F`
+              : ''}
+          </Text>
 
-      <View style={styles.spacer} />
+          <View style={styles.macros}>
+            <MacroBar
+              label="Protein"
+              consumed={consumed.protein}
+              goal={goals.protein}
+              color="#208AEF"
+            />
+            <MacroBar label="Carbs" consumed={consumed.carbs} goal={goals.carbs} color="#34C759" />
+            <MacroBar label="Fat" consumed={consumed.fat} goal={goals.fat} color="#FF9500" />
+          </View>
+        </View>
 
-      <Button label="Sign out" variant="secondary" onPress={handleSignOut} />
+        {hasEntries ? (
+          <View style={styles.meals}>
+            {MEAL_ORDER.map((meal) => (
+              <MealSection key={meal} meal={meal} items={byMeal[meal]} />
+            ))}
+          </View>
+        ) : (
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>Nothing logged yet</Text>
+            <Text style={styles.emptyBody}>
+              Tap “+ Log food” and describe what you ate — we’ll estimate the calories and macros.
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+
+      <Link href="/log" asChild>
+        <Pressable accessibilityRole="button" style={styles.logButton}>
+          <Text style={styles.logButtonLabel}>+ Log food</Text>
+        </Pressable>
+      </Link>
     </Screen>
   )
 }
 
+function MealSection({ meal, items }: { meal: MealType; items: DiaryItem[] }) {
+  if (items.length === 0) return null
+  const total = sumMacros(items)
+
+  return (
+    <View style={styles.mealSection}>
+      <View style={styles.mealHeader}>
+        <Text style={styles.mealTitle}>{MEAL_LABELS[meal]}</Text>
+        <Text style={styles.mealCalories}>{Math.round(total.calories)} kcal</Text>
+      </View>
+      {items.map((item, index) => (
+        <View key={`${meal}-${index}`} style={styles.entryRow}>
+          <View style={styles.entryMain}>
+            <Text style={styles.entryName} numberOfLines={1}>
+              {item.name}
+            </Text>
+            <View style={styles.entryMeta}>
+              <Text style={styles.entryQty}>
+                {formatQuantity(item.quantity)} {item.unit}
+              </Text>
+              {item.source === 'ai_estimate' ? <EstimateTag /> : null}
+            </View>
+          </View>
+          <Text style={styles.entryCalories}>{Math.round(item.calories)}</Text>
+        </View>
+      ))}
+    </View>
+  )
+}
+
+function formatQuantity(qty: number): string {
+  return Number.isInteger(qty) ? String(qty) : qty.toFixed(1)
+}
+
 const styles = StyleSheet.create({
-  section: {
-    gap: 4,
+  screen: {
+    paddingBottom: 0,
   },
-  heading: {
+  content: {
+    gap: 20,
+    paddingBottom: 96,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  today: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#111',
+  },
+  date: {
+    fontSize: 15,
+    color: '#999',
+  },
+  signOut: {
+    fontSize: 15,
+    color: '#208AEF',
+    fontWeight: '600',
+  },
+  summaryCard: {
+    backgroundColor: '#F7F7F9',
+    borderRadius: 16,
+    padding: 16,
+    gap: 12,
+  },
+  calorieHeader: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+  },
+  calorieValue: {
+    fontSize: 34,
+    fontWeight: '800',
+    color: '#111',
+  },
+  calorieUnit: {
+    fontSize: 15,
+    color: '#999',
+  },
+  track: {
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#E4E4E9',
+    overflow: 'hidden',
+  },
+  fill: {
+    height: '100%',
+    borderRadius: 5,
+    backgroundColor: '#208AEF',
+  },
+  calorieRemaining: {
+    fontSize: 13,
+    color: '#666',
+  },
+  macros: {
+    gap: 12,
+    marginTop: 4,
+  },
+  meals: {
+    gap: 20,
+  },
+  mealSection: {
+    gap: 8,
+  },
+  mealHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+  },
+  mealTitle: {
     fontSize: 13,
     fontWeight: '700',
     textTransform: 'uppercase',
     color: '#999',
     letterSpacing: 0.5,
   },
-  value: {
-    fontSize: 17,
+  mealCalories: {
+    fontSize: 13,
+    color: '#999',
+    fontWeight: '600',
+  },
+  entryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 4,
+  },
+  entryMain: {
+    flex: 1,
+    gap: 4,
+  },
+  entryName: {
+    fontSize: 16,
     color: '#111',
   },
-  muted: {
+  entryMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  entryQty: {
     fontSize: 13,
     color: '#999',
   },
-  spacer: {
-    flex: 1,
+  entryCalories: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111',
+  },
+  empty: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    gap: 8,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111',
+  },
+  emptyBody: {
+    fontSize: 15,
+    color: '#999',
+    textAlign: 'center',
+    lineHeight: 21,
+  },
+  logButton: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    bottom: 24,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: '#208AEF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  logButtonLabel: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '700',
   },
 })

@@ -31,9 +31,15 @@ const { url, anonKey } = resolveConfig()
 /**
  * Singleton Supabase client for the app. Sessions are persisted with
  * AsyncStorage so the user stays signed in across launches.
+ *
+ * During web static rendering (SSR) there is no `window`, and AsyncStorage's
+ * web backend touches it at call time — omit storage there; the session is
+ * only needed at runtime.
  */
+const isServer = typeof window === 'undefined'
+
 export const supabase = createSupabaseClient({
   url,
   anonKey,
-  storage: AsyncStorage,
+  storage: isServer ? undefined : AsyncStorage,
 })

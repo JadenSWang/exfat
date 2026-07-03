@@ -121,13 +121,19 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   label: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: '600',
     color: '#BBB',
+    // Box around the day of which only the bottom edge is visible: the
+    // underline hugs the word, a little wider via the side padding.
+    paddingHorizontal: 10,
+    paddingBottom: 6,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
   },
   labelSelected: {
-    fontSize: 17,
-    fontWeight: '800',
+    fontWeight: '700',
     color: '#111',
+    borderBottomColor: '#111',
   },
 })

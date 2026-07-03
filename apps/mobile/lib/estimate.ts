@@ -19,6 +19,10 @@ const DEFAULT_ESTIMATE_URL = 'http://100.64.0.62:8787/estimate'
 const ESTIMATE_URL = process.env.EXPO_PUBLIC_ESTIMATE_URL ?? DEFAULT_ESTIMATE_URL
 const ESTIMATE_TOKEN = process.env.EXPO_PUBLIC_ESTIMATE_TOKEN
 
+// The estimator's non-/estimate routes (e.g. /label/jobs) hang off the host
+// root, so strip the trailing /estimate from the configured URL.
+const ESTIMATOR_BASE = ESTIMATE_URL.replace(/\/estimate$/, '')
+
 /**
  * Estimate nutrition for a free-text meal description via the paseo estimator.
  * Throws on network/service errors so the caller can show a friendly hint.
@@ -89,4 +93,55 @@ export async function getEstimateJob(id: string): Promise<EstimateJobStatus> {
     throw new Error(`Estimator responded ${res.status}`)
   }
   return (await res.json()) as EstimateJobStatus
+}
+
+/**
+ * Per-serving nutrition facts read off a photographed label — the result of a
+ * label-scan job. Shape matches the estimator's `shapeLabel`.
+ */
+export interface LabelScan {
+  name: string
+  brand: string | null
+  servingQty: number
+  servingUnit: 'g' | 'ml' | 'serving'
+  calories: number
+  protein: number
+  carbs: number
+  fat: number
+}
+
+export interface LabelJobStatus {
+  status: 'pending' | 'done' | 'error'
+  result?: LabelScan
+  error?: string
+}
+
+/**
+ * Kick off a label-OCR job: a paseo agent reads the photographed Nutrition
+ * Facts panel and extracts per-serving values. Returns a job id to poll via
+ * {@link getLabelJob}. `image` is base64-encoded (no data-URI prefix).
+ */
+export async function startLabelScanJob(image: string, mime = 'image/jpeg'): Promise<string> {
+  const res = await fetch(`${ESTIMATOR_BASE}/label/jobs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ image, mime }),
+  })
+  if (!res.ok) {
+    throw new Error(`Estimator responded ${res.status}`)
+  }
+  const { id } = (await res.json()) as { id: string }
+  return id
+}
+
+/** Poll a job started with {@link startLabelScanJob}. */
+export async function getLabelJob(id: string): Promise<LabelJobStatus> {
+  const res = await fetch(`${ESTIMATOR_BASE}/label/jobs/${id}`, { headers: authHeaders() })
+  if (res.status === 404) {
+    throw new EstimateJobLostError(id)
+  }
+  if (!res.ok) {
+    throw new Error(`Estimator responded ${res.status}`)
+  }
+  return (await res.json()) as LabelJobStatus
 }

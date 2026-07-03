@@ -3,6 +3,7 @@ import type { Tables } from '@workout/supabase'
 import {
   logDiaryEntries,
   lookupBarcode,
+  saveCorrectedFood,
   submitBarcodeFood,
   updateDiaryEntryNutrition,
 } from '@workout/supabase'
@@ -24,6 +25,12 @@ import {
 
 import { Button } from '@/components/Button'
 import { Screen } from '@/components/Screen'
+import {
+  EstimateJobLostError,
+  getLabelJob,
+  startLabelScanJob,
+  type LabelScan,
+} from '@/lib/estimate'
 import { defaultMealForNow, todayISODate } from '@/lib/nutrition'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/providers/auth'
@@ -56,10 +63,54 @@ function servingsForQuantity(
   return null
 }
 
+const LABEL_POLL_INTERVAL_MS = 2000
+const LABEL_POLL_TIMEOUT_MS = 90 * 1000
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Upload the photographed label and poll until the estimator's OCR agent
+ * returns the per-serving facts. Mirrors the fire-and-forget job polling in
+ * pendingLogs.ts: resubmit if the estimator restarted and lost the job.
+ */
+async function pollLabelScan(imageBase64: string): Promise<LabelScan> {
+  let jobId = await startLabelScanJob(imageBase64)
+  const deadline = Date.now() + LABEL_POLL_TIMEOUT_MS
+  let resubmits = 0
+  while (Date.now() < deadline) {
+    await sleep(LABEL_POLL_INTERVAL_MS)
+    let job
+    try {
+      job = await getLabelJob(jobId)
+    } catch (e) {
+      if (e instanceof EstimateJobLostError) {
+        if (resubmits >= 2) {
+          throw new Error('The estimator keeps restarting. Try again in a minute.')
+        }
+        resubmits += 1
+        jobId = await startLabelScanJob(imageBase64)
+        continue
+      }
+      // Dropped poll (network blip) — retry on the next tick.
+      continue
+    }
+    if (job.status === 'done' && job.result) return job.result
+    if (job.status === 'error') {
+      throw new Error(job.error ?? 'Could not read the nutrition label.')
+    }
+  }
+  throw new Error('Timed out reading the label. Try again with better lighting.')
+}
+
 type Phase =
   | { kind: 'scanning' }
   | { kind: 'looking-up'; barcode: string }
   | { kind: 'found'; food: Tables<'foods'> }
+  | { kind: 'scan-label'; food: Tables<'foods'> }
+  | { kind: 'reading-label'; food: Tables<'foods'> }
+  | { kind: 'confirm-label'; food: Tables<'foods'>; extracted: SubmitLabelInput }
   | { kind: 'not-found'; barcode: string }
 
 export default function ScanBarcodeScreen() {
@@ -90,6 +141,8 @@ export default function ScanBarcodeScreen() {
   const [error, setError] = useState<string | null>(null)
   // Guards against the camera firing onBarcodeScanned many times per second.
   const handledRef = useRef(false)
+  // Imperative handle for the still-capture camera used to photograph a label.
+  const cameraRef = useRef<CameraView>(null)
 
   async function handleScanned(barcode: string) {
     if (handledRef.current) return
@@ -113,6 +166,46 @@ export default function ScanBarcodeScreen() {
   function resetScanner() {
     handledRef.current = false
     setPhase({ kind: 'scanning' })
+  }
+
+  // Snap the nutrition label, read it via the estimator, and hand the extracted
+  // numbers to the confirmation form. Returns to the found screen on failure.
+  async function readLabel(food: Tables<'foods'>) {
+    setError(null)
+    let base64: string | undefined
+    try {
+      const photo = await cameraRef.current?.takePictureAsync({ base64: true, quality: 0.5 })
+      base64 = photo?.base64
+    } catch {
+      setError('Could not capture the photo — try again.')
+      return
+    }
+    if (!base64) {
+      setError('Could not capture the photo — try again.')
+      return
+    }
+    setPhase({ kind: 'reading-label', food })
+    try {
+      const scan = await pollLabelScan(base64)
+      setPhase({
+        kind: 'confirm-label',
+        food,
+        extracted: {
+          barcode: food.barcode ?? '',
+          name: scan.name,
+          brand: scan.brand,
+          servingQty: scan.servingQty,
+          servingUnit: scan.servingUnit,
+          calories: scan.calories,
+          protein: scan.protein,
+          carbs: scan.carbs,
+          fat: scan.fat,
+        },
+      })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not read the label — try again.')
+      setPhase({ kind: 'found', food })
+    }
   }
 
   async function saveFood(food: Tables<'foods'>, servingCount: number) {
@@ -264,9 +357,89 @@ export default function ScanBarcodeScreen() {
             onPress={() => saveFood(food, servings)}
             loading={isSaving}
           />
+          <Button
+            label="Nutrition looks off? Scan the label"
+            variant="secondary"
+            onPress={() => {
+              setError(null)
+              setPhase({ kind: 'scan-label', food })
+            }}
+          />
           <Button label="Scan again" variant="secondary" onPress={resetScanner} />
         </ScrollView>
       </Screen>
+    )
+  }
+
+  // Correct a scanned product whose numbers looked wrong: photograph the label
+  // so the estimator can read the real per-serving facts off it.
+  if (phase.kind === 'scan-label') {
+    const { food } = phase
+    return (
+      <View style={styles.cameraWrap}>
+        <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} />
+        <View style={styles.cameraOverlay}>
+          <Text style={styles.cameraHint}>Fill the frame with the Nutrition Facts panel</Text>
+          {error ? <Text style={styles.cameraError}>{error}</Text> : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Capture label"
+            style={styles.shutterButton}
+            onPress={() => readLabel(food)}
+          >
+            <View style={styles.shutterInner} />
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={() => setPhase({ kind: 'found', food })}>
+            <Text style={styles.cameraCancel}>Cancel</Text>
+          </Pressable>
+        </View>
+      </View>
+    )
+  }
+
+  if (phase.kind === 'reading-label') {
+    return (
+      <Screen>
+        <View style={styles.lookupWrap}>
+          <ActivityIndicator size="large" color="#208AEF" />
+          <Text style={styles.lookupTitle}>Reading the label…</Text>
+          <Text style={styles.lookupSubtitle}>Pulling the numbers off the photo.</Text>
+        </View>
+      </Screen>
+    )
+  }
+
+  // Prefilled with the scanned numbers so the user can eyeball/fix them before
+  // they overwrite the entry's macros. Saved as a private corrected food.
+  if (phase.kind === 'confirm-label') {
+    const { food, extracted } = phase
+    return (
+      <SubmitLabelForm
+        barcode={extracted.barcode}
+        initial={extracted}
+        title="Confirm the label"
+        subtitle="Check these against the label, then use them to replace the calories and macros on this item."
+        submitLabel="Use these values"
+        error={error}
+        isSaving={isSaving}
+        onCancel={() => setPhase({ kind: 'found', food })}
+        onSubmit={async (input) => {
+          if (!user) {
+            setError('You need to be signed in to save corrections.')
+            return
+          }
+          setError(null)
+          setIsSaving(true)
+          try {
+            const corrected = await saveCorrectedFood(supabase, user.id, input)
+            await saveFood(corrected, servings)
+          } catch {
+            setError('Could not save the correction — is the backend running?')
+          } finally {
+            setIsSaving(false)
+          }
+        }}
+      />
     )
   }
 
@@ -311,25 +484,35 @@ interface SubmitLabelInput {
 
 function SubmitLabelForm({
   barcode,
+  initial,
+  title = 'New product',
+  subtitle,
+  submitLabel = 'Save and log',
   error,
   isSaving,
   onCancel,
   onSubmit,
 }: {
   barcode: string
+  initial?: Partial<SubmitLabelInput>
+  title?: string
+  subtitle?: string
+  submitLabel?: string
   error: string | null
   isSaving: boolean
   onCancel: () => void
   onSubmit: (input: SubmitLabelInput) => void
 }) {
-  const [name, setName] = useState('')
-  const [brand, setBrand] = useState('')
-  const [servingQty, setServingQty] = useState(1)
-  const [servingUnit, setServingUnit] = useState<'g' | 'ml' | 'serving'>('serving')
-  const [calories, setCalories] = useState(0)
-  const [protein, setProtein] = useState(0)
-  const [carbs, setCarbs] = useState(0)
-  const [fat, setFat] = useState(0)
+  const [name, setName] = useState(initial?.name ?? '')
+  const [brand, setBrand] = useState(initial?.brand ?? '')
+  const [servingQty, setServingQty] = useState(initial?.servingQty ?? 1)
+  const [servingUnit, setServingUnit] = useState<'g' | 'ml' | 'serving'>(
+    initial?.servingUnit ?? 'serving',
+  )
+  const [calories, setCalories] = useState(initial?.calories ?? 0)
+  const [protein, setProtein] = useState(initial?.protein ?? 0)
+  const [carbs, setCarbs] = useState(initial?.carbs ?? 0)
+  const [fat, setFat] = useState(initial?.fat ?? 0)
 
   return (
     <Screen>
@@ -338,10 +521,10 @@ function SubmitLabelForm({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <Text style={styles.missTitle}>New product</Text>
+          <Text style={styles.missTitle}>{title}</Text>
           <Text style={styles.missSubtitle}>
-            Nobody has logged this barcode yet ({barcode}). Copy the nutrition label to add it —
-            you&apos;ll help everyone who scans it after you.
+            {subtitle ??
+              `Nobody has logged this barcode yet (${barcode}). Copy the nutrition label to add it — you'll help everyone who scans it after you.`}
           </Text>
 
           <TextInput
@@ -389,7 +572,7 @@ function SubmitLabelForm({
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <Button
-            label="Save and log"
+            label={submitLabel}
             loading={isSaving}
             disabled={!name.trim()}
             onPress={() =>
@@ -513,6 +696,28 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     paddingHorizontal: 24,
+  },
+  shutterButton: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 4,
+    borderColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shutterInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+  },
+  cameraCancel: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
   },
   card: {
     borderRadius: 12,

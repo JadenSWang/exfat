@@ -34,6 +34,7 @@ export {
 export {
   lookupBarcode,
   submitBarcodeFood,
+  saveCorrectedFood,
   type BarcodeLookupResult,
   type BarcodeSubmissionInput,
 } from './barcode'

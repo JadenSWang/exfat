@@ -51,12 +51,8 @@ export interface BarcodeSubmissionInput {
  *  2. A private `foods` row (source 'barcode') so the submitter can use their
  *     own data immediately. Returned for logging into the diary.
  */
-export async function submitBarcodeFood(
-  client: WorkoutSupabaseClient,
-  userId: string,
-  input: BarcodeSubmissionInput,
-): Promise<Tables<'foods'>> {
-  const label = {
+function labelColumns(input: BarcodeSubmissionInput) {
+  return {
     barcode: input.barcode,
     name: input.name,
     brand: input.brand ?? null,
@@ -67,17 +63,47 @@ export async function submitBarcodeFood(
     carbs: input.carbs,
     fat: input.fat,
   }
+}
 
-  const { error: submissionError } = await client
-    .from('barcode_submissions')
-    .upsert({ user_id: userId, ...label }, { onConflict: 'user_id,barcode' })
-  if (submissionError) throw submissionError
-
-  const { data: food, error: foodError } = await client
+/** Insert a private `foods` row (owned by the user) and return it. */
+async function insertPrivateFood(
+  client: WorkoutSupabaseClient,
+  userId: string,
+  input: BarcodeSubmissionInput,
+): Promise<Tables<'foods'>> {
+  const { data: food, error } = await client
     .from('foods')
-    .insert({ ...label, source: 'barcode', owner_id: userId })
+    .insert({ ...labelColumns(input), source: 'barcode', owner_id: userId })
     .select()
     .single()
-  if (foodError) throw foodError
+  if (error) throw error
   return food
+}
+
+export async function submitBarcodeFood(
+  client: WorkoutSupabaseClient,
+  userId: string,
+  input: BarcodeSubmissionInput,
+): Promise<Tables<'foods'>> {
+  const { error: submissionError } = await client
+    .from('barcode_submissions')
+    .upsert({ user_id: userId, ...labelColumns(input) }, { onConflict: 'user_id,barcode' })
+  if (submissionError) throw submissionError
+
+  return insertPrivateFood(client, userId, input)
+}
+
+/**
+ * Save a nutrition label the user read off the back of a product to correct a
+ * scanned barcode whose numbers were wrong. Unlike {@link submitBarcodeFood},
+ * this does NOT touch `barcode_submissions` — the correction stays private to
+ * the user (v1). Returns the private `foods` row so the caller can point the
+ * corrected diary entry at it.
+ */
+export async function saveCorrectedFood(
+  client: WorkoutSupabaseClient,
+  userId: string,
+  input: BarcodeSubmissionInput,
+): Promise<Tables<'foods'>> {
+  return insertPrivateFood(client, userId, input)
 }

@@ -194,9 +194,9 @@ function pendingJobCount() {
   return n
 }
 
-function createJob(userId) {
+function createJob(userId, kind = 'estimate') {
   const id = randomUUID()
-  const job = { status: 'pending', createdAt: Date.now(), waiters: [], userId: userId ?? null }
+  const job = { status: 'pending', kind, createdAt: Date.now(), waiters: [], userId: userId ?? null }
   job.timer = setTimeout(() => {
     failJob(id, 'Timed out waiting for the estimator agent.')
   }, JOB_TIMEOUT_MS)
@@ -210,6 +210,12 @@ function settleJob(id, patch) {
   if (!job || job.status !== 'pending') return false
   clearTimeout(job.timer)
   Object.assign(job, patch)
+  // Label jobs stash a temp photo for the agent to Read; drop it once the job
+  // settles for any reason (done, error, or timeout).
+  if (job.imagePath) {
+    rmSync(job.imagePath, { force: true })
+    job.imagePath = null
+  }
   for (const waiter of job.waiters) waiter(job)
   job.waiters = []
   return true
@@ -242,8 +248,9 @@ function enqueue(task) {
 }
 
 // Launch a detached agent for the job; resolves once paseo accepts the run.
-// The result arrives later via the callback endpoint.
-function launchPaseo(text, jobId) {
+// The result arrives later via the callback endpoint. `prompt` is the fully
+// built agent instruction (estimate or label OCR).
+function launchPaseo(prompt, jobId) {
   // Re-ensure on every run: paseo refuses to create a workspace in a missing
   // cwd, and the dir can vanish out from under a long-running server.
   mkdirSync(WORKDIR, { recursive: true })
@@ -263,8 +270,7 @@ function launchPaseo(text, jobId) {
     WORKDIR,
   ]
   if (workspaceId) args.push('--workspace', workspaceId)
-  const canSearch = Boolean(SUPABASE_URL && SUPABASE_SERVICE_KEY && jobs.get(jobId)?.userId)
-  args.push(buildPrompt(text, jobId, canSearch))
+  args.push(prompt)
 
   return new Promise((resolve, reject) => {
     execFile('paseo', args, { timeout: LAUNCH_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
@@ -291,15 +297,15 @@ function launchPaseo(text, jobId) {
 
 // Launch, self-healing if the warm workspace went away (e.g. after a janitor
 // sweep or paseo GC): clear it and retry once cold.
-async function launchWithHeal(text, jobId) {
+async function launchWithHeal(prompt, jobId) {
   try {
-    return await launchPaseo(text, jobId)
+    return await launchPaseo(prompt, jobId)
   } catch (e) {
     if (workspaceId) {
       console.warn('[estimate] retrying launch cold after error:', e.message)
       workspaceId = null
       saveWorkspaceId(null)
-      return launchPaseo(text, jobId)
+      return launchPaseo(prompt, jobId)
     }
     throw e
   }
@@ -307,7 +313,62 @@ async function launchWithHeal(text, jobId) {
 
 function startEstimate(text, userId) {
   const jobId = createJob(userId)
-  enqueue(() => launchWithHeal(text, jobId)).catch((e) => failJob(jobId, e.message))
+  const canSearch = Boolean(SUPABASE_URL && SUPABASE_SERVICE_KEY && userId)
+  const prompt = buildPrompt(text, jobId, canSearch)
+  enqueue(() => launchWithHeal(prompt, jobId)).catch((e) => failJob(jobId, e.message))
+  return jobId
+}
+
+// ---------------------------------------------------------------------------
+// Label OCR jobs. The app photographs a Nutrition Facts panel when a scanned
+// barcode's numbers look wrong; a paseo agent Reads the image (its Read tool is
+// natively multimodal — no vision API needed) and POSTs the per-serving facts
+// back through the same callback machinery.
+// ---------------------------------------------------------------------------
+
+// Constrained to what the app's label form accepts.
+const LABEL_UNITS = ['g', 'ml', 'serving']
+
+function buildLabelPrompt(imagePath, jobId) {
+  const callback = `http://127.0.0.1:${PORT}/internal/jobs/${jobId}/result`
+  return `You are reading a product's Nutrition Facts label from a photo.
+
+Use your Read tool to open the image file at:
+${imagePath}
+
+Extract the product's nutrition facts PER SERVING. Read the serving size and the
+per-serving calories and macros. If the label only lists per-container values,
+divide by the servings per container to get per-serving numbers.
+
+Deliver the result by POSTing JSON to a local callback endpoint. This is your ONLY output channel — printing the JSON does nothing. Run exactly one command shaped like:
+
+curl -fsS -X POST '${callback}' -H 'content-type: application/json' -d '{"label":{"name":"...","brand":null,"servingQty":1,"servingUnit":"serving","calories":0,"protein":0,"carbs":0,"fat":0}}'
+
+Rules:
+- "servingUnit" MUST be one of: ${LABEL_UNITS.join(', ')}. Use "g" or "ml" when the serving size is a weight/volume (e.g. "30g" -> "g", "240ml" -> "ml"); otherwise "serving".
+- "servingQty" is the numeric serving size (e.g. 30 for "30g"; 1 for a single serving).
+- calories are kcal; protein/carbs/fat are grams. All are numbers.
+- "name" is the product name; "brand" is the brand or null if not shown.
+- If you cannot read the label, POST {"label":null,"error":"<short reason>"} instead.
+- After the curl succeeds, stop. Do not do anything else.`
+}
+
+// Decode the app's base64 photo to a file the agent can Read. Named by a random
+// id so concurrent scans never collide.
+function writeLabelImage(image, mime) {
+  const dir = `${WORKDIR}/labels`
+  mkdirSync(dir, { recursive: true })
+  const ext = mime === 'image/png' ? 'png' : 'jpg'
+  const path = `${dir}/${randomUUID()}.${ext}`
+  writeFileSync(path, Buffer.from(image, 'base64'))
+  return path
+}
+
+function startLabel(imagePath) {
+  const jobId = createJob(null, 'label')
+  jobs.get(jobId).imagePath = imagePath
+  const prompt = buildLabelPrompt(imagePath, jobId)
+  enqueue(() => launchWithHeal(prompt, jobId)).catch((e) => failJob(jobId, e.message))
   return jobId
 }
 
@@ -362,6 +423,20 @@ function shape(rawItems) {
   }
 }
 
+// Coerce an agent's raw label object into the shape the app expects.
+function shapeLabel(raw) {
+  return {
+    name: String(raw.name ?? '').trim() || 'food',
+    brand: typeof raw.brand === 'string' && raw.brand.trim() ? raw.brand.trim() : null,
+    servingQty: num(raw.servingQty) || 1,
+    servingUnit: LABEL_UNITS.includes(raw.servingUnit) ? raw.servingUnit : 'serving',
+    calories: num(raw.calories),
+    protein: num(raw.protein),
+    carbs: num(raw.carbs),
+    fat: num(raw.fat),
+  }
+}
+
 function send(res, status, body) {
   const payload = JSON.stringify(body)
   res.writeHead(status, {
@@ -380,11 +455,11 @@ function authorized(req) {
   return header === TOKEN || bearer === TOKEN
 }
 
-function readBody(req, onJson) {
+function readBody(req, onJson, maxBytes = 100_000) {
   let raw = ''
   req.on('data', (c) => {
     raw += c
-    if (raw.length > 100_000) req.destroy()
+    if (raw.length > maxBytes) req.destroy()
   })
   req.on('end', () => onJson(raw))
 }
@@ -412,6 +487,14 @@ const server = createServer((req, res) => {
       const job = jobs.get(cbMatch[1])
       if (!job) return send(res, 404, { error: 'unknown job' })
       if (job.status !== 'pending') return send(res, 409, { error: 'job already settled' })
+      if (job.kind === 'label') {
+        if (!body.label) {
+          failJob(cbMatch[1], body.error ?? 'Could not read the nutrition label.')
+        } else {
+          completeJob(cbMatch[1], shapeLabel(body.label))
+        }
+        return send(res, 200, { ok: true })
+      }
       if (!Array.isArray(body.items)) return send(res, 400, { error: 'missing items[]' })
       if (body.items.length === 0) {
         failJob(cbMatch[1], body.error ?? 'The estimator could not process that meal.')
@@ -440,12 +523,41 @@ const server = createServer((req, res) => {
       })
   }
 
-  const jobMatch = req.url?.match(/^\/estimate\/jobs\/([\w-]+)$/)
+  const jobMatch = req.url?.match(/^\/(?:estimate|label)\/jobs\/([\w-]+)$/)
   if (req.method === 'GET' && jobMatch) {
     if (!authorized(req)) return send(res, 401, { error: 'unauthorized' })
     const job = jobs.get(jobMatch[1])
     if (!job) return send(res, 404, { error: 'unknown job' })
     return send(res, 200, { status: job.status, result: job.result, error: job.error })
+  }
+
+  // Label OCR: base64 photo in, async job out (poll via GET /label/jobs/:id).
+  // Bigger body cap than the text endpoints since a JPEG is much larger.
+  if (req.method === 'POST' && req.url === '/label/jobs') {
+    if (!authorized(req)) return send(res, 401, { error: 'unauthorized' })
+    return readBody(
+      req,
+      (raw) => {
+        let image
+        let mime
+        try {
+          const body = JSON.parse(raw)
+          image = String(body.image ?? '')
+          mime = typeof body.mime === 'string' ? body.mime : 'image/jpeg'
+        } catch {
+          return send(res, 400, { error: 'invalid JSON body' })
+        }
+        if (!image) return send(res, 400, { error: 'missing "image"' })
+        let imagePath
+        try {
+          imagePath = writeLabelImage(image, mime)
+        } catch (e) {
+          return send(res, 400, { error: `could not decode image: ${e.message}` })
+        }
+        return send(res, 202, { id: startLabel(imagePath), status: 'pending' })
+      },
+      8_000_000,
+    )
   }
 
   if (req.method !== 'POST' || !(req.url === '/estimate' || req.url === '/estimate/jobs')) {

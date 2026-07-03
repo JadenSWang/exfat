@@ -66,9 +66,23 @@ export async function startEstimateJob(text: string): Promise<string> {
   return id
 }
 
+/**
+ * The estimator no longer knows this job id — its jobs are in-memory, so a
+ * restart mid-estimate drops them. Callers should resubmit rather than keep
+ * polling a dead id.
+ */
+export class EstimateJobLostError extends Error {
+  constructor(id: string) {
+    super(`Estimate job ${id} was lost (estimator restarted).`)
+  }
+}
+
 /** Poll the status of a job started with {@link startEstimateJob}. */
 export async function getEstimateJob(id: string): Promise<EstimateJobStatus> {
   const res = await fetch(`${ESTIMATE_URL}/jobs/${id}`, { headers: authHeaders() })
+  if (res.status === 404) {
+    throw new EstimateJobLostError(id)
+  }
   if (!res.ok) {
     throw new Error(`Estimator responded ${res.status}`)
   }

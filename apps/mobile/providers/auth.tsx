@@ -8,7 +8,7 @@ interface AuthState {
   user: User | null
   isLoading: boolean
   /** Dev-only: enter the app without real auth (e.g. to preview the UI in Expo Go). */
-  devSignIn: () => void
+  devSignIn: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthState | undefined>(undefined)
@@ -68,7 +68,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session: effectiveSession,
         user: effectiveSession?.user ?? null,
         isLoading,
-        devSignIn: () => setDevSession(DEV_SESSION),
+        devSignIn: async () => {
+          // Prefer a real anonymous session (a genuine auth.users row, so RLS
+          // and diary inserts work). Falls back to the fake session — UI-only,
+          // saves will fail — when anonymous sign-ins are disabled in Supabase.
+          const { error } = await supabase.auth.signInAnonymously()
+          if (error) {
+            console.warn('[auth] anonymous sign-in unavailable, using fake dev session:', error.message)
+            setDevSession(DEV_SESSION)
+          }
+        },
       }}
     >
       {children}

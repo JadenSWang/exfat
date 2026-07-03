@@ -2,7 +2,12 @@ import { logDiaryEntries, type DiaryEntryInput } from '@workout/supabase'
 import type { QueryClient } from '@tanstack/react-query'
 import { useSyncExternalStore } from 'react'
 
-import { getEstimateJob, startEstimateJob, type NutritionEstimate } from '@/lib/estimate'
+import {
+  EstimateJobLostError,
+  getEstimateJob,
+  startEstimateJob,
+  type NutritionEstimate,
+} from '@/lib/estimate'
 import { defaultMealForNow, todayISODate } from '@/lib/nutrition'
 import { supabase } from '@/lib/supabase'
 
@@ -69,6 +74,21 @@ function sleep(ms: number) {
  */
 export function submitPendingLog(text: string, userId: string, queryClient: QueryClient) {
   const localId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  // The fake dev-preview session has no real auth.users row — the diary insert
+  // can only fail. Say so up front instead of after a successful estimate.
+  if (userId === 'dev-user') {
+    pending = [
+      ...pending,
+      {
+        id: localId,
+        text,
+        status: 'error',
+        error: 'Dev preview session can’t save to the diary. Sign in, or enable anonymous sign-ins in Supabase.',
+      },
+    ]
+    emit()
+    return
+  }
   const entryDate = todayISODate()
   const meal = defaultMealForNow()
   pending = [...pending, { id: localId, text, status: 'estimating' }]
@@ -76,15 +96,26 @@ export function submitPendingLog(text: string, userId: string, queryClient: Quer
 
   void (async () => {
     try {
-      const jobId = await startEstimateJob(text)
+      let jobId = await startEstimateJob(text)
       const deadline = Date.now() + POLL_TIMEOUT_MS
+      let resubmits = 0
       let result: NutritionEstimate | null = null
       while (Date.now() < deadline) {
         await sleep(POLL_INTERVAL_MS)
         let job
         try {
           job = await getEstimateJob(jobId)
-        } catch {
+        } catch (e) {
+          if (e instanceof EstimateJobLostError) {
+            // The estimator restarted and dropped its in-memory job — resubmit
+            // instead of polling a dead id until the timeout.
+            if (resubmits >= 2) {
+              throw new Error('The estimator keeps restarting. Try again in a minute.')
+            }
+            resubmits += 1
+            jobId = await startEstimateJob(text)
+            continue
+          }
           // Dropped poll (network blip) — retry on the next tick.
           continue
         }
@@ -119,7 +150,10 @@ export function submitPendingLog(text: string, userId: string, queryClient: Quer
     } catch (e) {
       update(localId, {
         status: 'error',
-        error: e instanceof Error ? e.message : 'Something went wrong logging that meal.',
+        error:
+          e instanceof Error
+            ? e.message
+            : (e as { message?: string } | null)?.message ?? 'Something went wrong logging that meal.',
       })
     }
   })()

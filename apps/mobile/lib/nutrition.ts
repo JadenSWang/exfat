@@ -33,15 +33,19 @@ export function suggestCalorieTarget(weight: number, unit: WeightUnit, goal: Goa
 }
 
 /**
- * Derive macro goals from a calorie target using a 30% protein / 40% carbs /
- * 30% fat calorie split (4/4/9 kcal per gram).
+ * Derive macro goals from a calorie target and body weight: protein is 1g per
+ * lb of body weight, and the remaining calories split between carbs and fat
+ * in the same 4:3 ratio as the old 40%/30% split (4/4/9 kcal per gram).
  */
-export function goalsFromCalories(calories: number): DailyGoals {
+export function goalsFromCalories(calories: number, weight: number, unit: WeightUnit): DailyGoals {
+  const lbs = unit === 'kg' ? weight * 2.20462 : weight
+  const protein = Math.round(lbs)
+  const remaining = Math.max(calories - protein * 4, 0)
   return {
     calories,
-    protein: Math.round((calories * 0.3) / 4),
-    carbs: Math.round((calories * 0.4) / 4),
-    fat: Math.round((calories * 0.3) / 9),
+    protein,
+    carbs: Math.round((remaining * (4 / 7)) / 4),
+    fat: Math.round((remaining * (3 / 7)) / 9),
   }
 }
 

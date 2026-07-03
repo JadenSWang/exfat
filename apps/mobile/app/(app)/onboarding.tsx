@@ -46,7 +46,7 @@ export default function OnboardingScreen() {
     setIsSaving(true)
     try {
       await updateProfileWeight(supabase, user.id, weight, unit)
-      await upsertNutritionGoals(supabase, user.id, goalsFromCalories(calories))
+      await upsertNutritionGoals(supabase, user.id, goalsFromCalories(calories, weight, unit))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['profile'] }),
         queryClient.invalidateQueries({ queryKey: ['nutrition-goals'] }),

@@ -28,6 +28,11 @@ const HOST = process.env.EXFAT_HOST ?? '0.0.0.0'
 const MODEL = process.env.EXFAT_MODEL ?? 'claude-haiku-4-5'
 const TOKEN = process.env.EXFAT_TOKEN ?? null
 const WORKDIR = process.env.EXFAT_WORKDIR ?? `${process.env.HOME}/.exfat-estimator`
+// Optional Supabase access for the food-search tool the agent can call. When
+// unset, search returns empty results and everything degrades to pure estimates.
+const SUPABASE_URL = process.env.EXFAT_SUPABASE_URL ?? process.env.SUPABASE_URL ?? null
+const SUPABASE_SERVICE_KEY =
+  process.env.EXFAT_SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? null
 const LAUNCH_TIMEOUT_MS = 30_000
 const JOB_TIMEOUT_MS = 120_000
 
@@ -66,21 +71,108 @@ const SYSTEM =
 
 // The agent delivers its result by POSTing to our callback — its text output is
 // never read, so the prompt is explicit that curl is the only output channel.
-function buildPrompt(text, jobId) {
+function buildPrompt(text, jobId, canSearch) {
   const callback = `http://127.0.0.1:${PORT}/internal/jobs/${jobId}/result`
+  const search = `http://127.0.0.1:${PORT}/internal/jobs/${jobId}/search`
+  const searchSection = canSearch
+    ? `
+Before estimating, check the user's known foods — they often log the same products daily
+(e.g. an egg brand they scanned yesterday). For each item that sounds like a packaged/branded
+product or a repeat staple, run:
+
+curl -fsS '${search}?q=<term>'
+
+It returns {"results":[{"id","name","brand","servingQty","servingUnit","calories","protein","carbs","fat","recent"}]}
+where macros are per serving and "recent": true means the user logged that exact food lately.
+If a result clearly matches the described item, use its label macros scaled to the described
+amount, set that item's "foodId" to the result's id, and confidence to 1. If nothing matches,
+estimate as usual with "foodId": null. Search at most a handful of terms.
+`
+    : ''
   return `${SYSTEM}
 
 Meal: ${text}
-
+${searchSection}
 Deliver the estimate by POSTing JSON to a local callback endpoint. This is your ONLY output channel — printing the JSON does nothing. Run exactly one command shaped like:
 
-curl -fsS -X POST '${callback}' -H 'content-type: application/json' -d '{"items":[{"name":"...","quantity":1,"unit":"serving","calories":0,"protein":0,"carbs":0,"fat":0,"confidence":0.5}]}'
+curl -fsS -X POST '${callback}' -H 'content-type: application/json' -d '{"items":[{"name":"...","quantity":1,"unit":"serving","calories":0,"protein":0,"carbs":0,"fat":0,"confidence":0.5,"foodId":null}]}'
 
 Rules:
 - "unit" MUST be one of: ${FOOD_UNITS.join(', ')}.
 - quantity/calories/protein/carbs/fat are numbers (grams for macros, kcal for calories); confidence is 0..1.
+- "foodId" is the id of a matched known food, or null.
 - If you cannot produce an estimate, POST {"items":[],"error":"<short reason>"} instead.
 - After the curl succeeds, stop. Do not do anything else.`
+}
+
+// ---------------------------------------------------------------------------
+// Food search backing the agent's tool call. Queries Supabase REST directly
+// (service key) for the job's user: their recently logged foods first, then a
+// name/brand match over their private + global foods.
+// ---------------------------------------------------------------------------
+
+function foodRowToResult(row, recent) {
+  return {
+    id: row.id,
+    name: row.name,
+    brand: row.brand,
+    servingQty: row.serving_qty,
+    servingUnit: row.serving_unit,
+    calories: row.calories,
+    protein: row.protein,
+    carbs: row.carbs,
+    fat: row.fat,
+    recent,
+  }
+}
+
+async function supabaseRest(path) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    headers: {
+      apikey: SUPABASE_SERVICE_KEY,
+      authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+    },
+  })
+  if (!res.ok) throw new Error(`supabase REST ${res.status} for ${path}`)
+  return res.json()
+}
+
+const FOOD_COLUMNS = 'id,name,brand,serving_qty,serving_unit,calories,protein,carbs,fat'
+
+async function searchFoods(userId, rawQuery) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || !userId) return []
+  // PostgREST filter values: strip characters that change filter syntax.
+  const term = rawQuery.replace(/[,()*%]/g, '').trim().toLowerCase()
+  if (!term) return []
+
+  const [recentRows, nameRows] = await Promise.all([
+    supabaseRest(
+      `diary_entries?select=food_id,foods(${FOOD_COLUMNS})` +
+        `&user_id=eq.${userId}&food_id=not.is.null&order=created_at.desc&limit=100`,
+    ),
+    supabaseRest(
+      `foods?select=${FOOD_COLUMNS}` +
+        `&and=(or(name.ilike.*${encodeURIComponent(term)}*,brand.ilike.*${encodeURIComponent(term)}*),` +
+        `or(owner_id.is.null,owner_id.eq.${userId}))&limit=8`,
+    ),
+  ])
+
+  const results = []
+  const seen = new Set()
+  for (const row of recentRows) {
+    const food = row.foods
+    if (!food || seen.has(food.id)) continue
+    const haystack = `${food.name} ${food.brand ?? ''}`.toLowerCase()
+    if (!haystack.includes(term)) continue
+    seen.add(food.id)
+    results.push(foodRowToResult(food, true))
+  }
+  for (const food of nameRows) {
+    if (seen.has(food.id)) continue
+    seen.add(food.id)
+    results.push(foodRowToResult(food, false))
+  }
+  return results.slice(0, 8)
 }
 
 mkdirSync(WORKDIR, { recursive: true })
@@ -102,9 +194,9 @@ function pendingJobCount() {
   return n
 }
 
-function createJob() {
+function createJob(userId) {
   const id = randomUUID()
-  const job = { status: 'pending', createdAt: Date.now(), waiters: [] }
+  const job = { status: 'pending', createdAt: Date.now(), waiters: [], userId: userId ?? null }
   job.timer = setTimeout(() => {
     failJob(id, 'Timed out waiting for the estimator agent.')
   }, JOB_TIMEOUT_MS)
@@ -171,7 +263,8 @@ function launchPaseo(text, jobId) {
     WORKDIR,
   ]
   if (workspaceId) args.push('--workspace', workspaceId)
-  args.push(buildPrompt(text, jobId))
+  const canSearch = Boolean(SUPABASE_URL && SUPABASE_SERVICE_KEY && jobs.get(jobId)?.userId)
+  args.push(buildPrompt(text, jobId, canSearch))
 
   return new Promise((resolve, reject) => {
     execFile('paseo', args, { timeout: LAUNCH_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
@@ -212,8 +305,8 @@ async function launchWithHeal(text, jobId) {
   }
 }
 
-function startEstimate(text) {
-  const jobId = createJob()
+function startEstimate(text, userId) {
+  const jobId = createJob(userId)
   enqueue(() => launchWithHeal(text, jobId)).catch((e) => failJob(jobId, e.message))
   return jobId
 }
@@ -250,6 +343,7 @@ function shape(rawItems) {
     carbs: num(it.carbs),
     fat: num(it.fat),
     confidence: num(it.confidence),
+    foodId: typeof it.foodId === 'string' && it.foodId ? it.foodId : null,
   }))
   const totals = items.reduce(
     (acc, it) => ({
@@ -328,6 +422,24 @@ const server = createServer((req, res) => {
     })
   }
 
+  // Agent food-search tool. Localhost-only, scoped to a live job so the agent
+  // can only search on behalf of the user who submitted that job.
+  const searchMatch = req.url?.match(/^\/internal\/jobs\/([\w-]+)\/search\?(.*)$/)
+  if (req.method === 'GET' && searchMatch) {
+    if (req.socket.remoteAddress !== '127.0.0.1' && req.socket.remoteAddress !== '::ffff:127.0.0.1') {
+      return send(res, 403, { error: 'search is localhost-only' })
+    }
+    const job = jobs.get(searchMatch[1])
+    if (!job) return send(res, 404, { error: 'unknown job' })
+    const q = new URLSearchParams(searchMatch[2]).get('q') ?? ''
+    return searchFoods(job.userId, q)
+      .then((results) => send(res, 200, { results }))
+      .catch((e) => {
+        console.error('[estimate] food search failed:', e.message)
+        send(res, 200, { results: [] }) // degrade to a plain estimate
+      })
+  }
+
   const jobMatch = req.url?.match(/^\/estimate\/jobs\/([\w-]+)$/)
   if (req.method === 'GET' && jobMatch) {
     if (!authorized(req)) return send(res, 401, { error: 'unauthorized' })
@@ -343,14 +455,20 @@ const server = createServer((req, res) => {
 
   readBody(req, (raw) => {
     let text
+    let userId = null
     try {
-      text = String(JSON.parse(raw).text ?? '').trim()
+      const body = JSON.parse(raw)
+      text = String(body.text ?? '').trim()
+      // Enables the known-foods search for this job; UUIDs only (goes into
+      // PostgREST filters).
+      const rawUser = String(body.userId ?? '')
+      userId = /^[0-9a-f-]{36}$/i.test(rawUser) ? rawUser : null
     } catch {
       return send(res, 400, { error: 'invalid JSON body' })
     }
     if (!text) return send(res, 400, { error: 'missing "text"' })
 
-    const jobId = startEstimate(text)
+    const jobId = startEstimate(text, userId)
 
     if (req.url === '/estimate/jobs') {
       return send(res, 202, { id: jobId, status: 'pending' })

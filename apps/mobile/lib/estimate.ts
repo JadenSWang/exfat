@@ -53,11 +53,13 @@ function authHeaders(): Record<string, string> {
  * to poll via {@link getEstimateJob} — big meals can take longer than the
  * platform fetch timeout, so we never wait on a single long request.
  */
-export async function startEstimateJob(text: string): Promise<string> {
+export async function startEstimateJob(text: string, userId?: string): Promise<string> {
   const res = await fetch(`${ESTIMATE_URL}/jobs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ text }),
+    // userId lets the estimator search the user's previously scanned/logged
+    // foods and match items to exact label data instead of estimating.
+    body: JSON.stringify({ text, userId }),
   })
   if (!res.ok) {
     throw new Error(`Estimator responded ${res.status}`)

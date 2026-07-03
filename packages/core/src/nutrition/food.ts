@@ -30,4 +30,10 @@ export interface EstimatedFoodItem {
   fat: number
   /** Model confidence in this estimate, from 0 (none) to 1 (certain). */
   confidence: number
+  /**
+   * Id of a known `foods` row this item was matched to (e.g. a product the
+   * user scanned before). When set, the macros are that food's label values
+   * scaled to the quantity — authoritative, not an estimate.
+   */
+  foodId?: string | null
 }

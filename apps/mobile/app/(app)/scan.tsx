@@ -1,3 +1,4 @@
+import type { FoodUnit } from '@workout/core'
 import type { Tables } from '@workout/supabase'
 import {
   logDiaryEntries,
@@ -10,6 +11,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useRef, useState } from 'react'
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -29,6 +31,31 @@ import { useAuth } from '@/providers/auth'
 // Retail food barcodes only — QR/PDF417 etc. are never nutrition labels.
 const FOOD_BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e'] as const
 
+const GRAMS_PER_UNIT: Partial<Record<FoodUnit, number>> = { g: 1, oz: 28.35 }
+const ML_PER_UNIT: Partial<Record<FoodUnit, number>> = { ml: 1, tsp: 4.93, tbsp: 14.79, cup: 236.59 }
+
+/**
+ * How many servings of `food` the original entry's quantity corresponds to,
+ * or null when the units aren't comparable (e.g. an entry in grams against a
+ * food whose label only gives per-serving numbers).
+ */
+function servingsForQuantity(
+  food: Tables<'foods'>,
+  quantity: number,
+  unit: FoodUnit,
+): number | null {
+  if (!Number.isFinite(quantity) || quantity <= 0 || food.serving_qty <= 0) return null
+  const grams = GRAMS_PER_UNIT[unit]
+  if (food.serving_unit === 'g' && grams) return (quantity * grams) / food.serving_qty
+  const ml = ML_PER_UNIT[unit]
+  if (food.serving_unit === 'ml' && ml) return (quantity * ml) / food.serving_qty
+  // Count-based entries: treat each piece/serving as one serving of the product.
+  if (unit === 'serving' || unit === 'piece') {
+    return food.serving_unit === 'serving' ? quantity / food.serving_qty : quantity
+  }
+  return null
+}
+
 type Phase =
   | { kind: 'scanning' }
   | { kind: 'looking-up'; barcode: string }
@@ -40,8 +67,21 @@ export default function ScanBarcodeScreen() {
   const queryClient = useQueryClient()
   const { user } = useAuth()
   // When set, we're refining an existing AI-estimated diary entry: the scanned
-  // product replaces that entry's nutrition instead of logging a new one.
-  const { refineEntryId } = useLocalSearchParams<{ refineEntryId?: string }>()
+  // product replaces that entry's nutrition instead of logging a new one. The
+  // entry keeps its logged quantity/unit; macros are rescaled to it.
+  const params = useLocalSearchParams<{
+    date?: string
+    refineEntryId?: string
+    refineQty?: string
+    refineUnit?: string
+  }>()
+  const refine = params.refineEntryId
+    ? {
+        entryId: params.refineEntryId,
+        quantity: Number.parseFloat(params.refineQty ?? ''),
+        unit: (params.refineUnit ?? 'serving') as FoodUnit,
+      }
+    : null
   const [permission, requestPermission] = useCameraPermissions()
 
   const [phase, setPhase] = useState<Phase>({ kind: 'scanning' })
@@ -83,27 +123,41 @@ export default function ScanBarcodeScreen() {
     setError(null)
     setIsSaving(true)
     try {
-      const nutrition = {
-        description: food.brand ? `${food.brand} ${food.name}` : food.name,
-        quantity: food.serving_qty * servingCount,
-        unit: food.serving_unit,
-        calories: food.calories * servingCount,
-        protein: food.protein * servingCount,
-        carbs: food.carbs * servingCount,
-        fat: food.fat * servingCount,
-        source: 'barcode' as const,
-        foodId: food.id,
-      }
-      if (refineEntryId) {
-        // Keep the entry's date and meal; swap the estimate for label-accurate data.
-        await updateDiaryEntryNutrition(supabase, refineEntryId, nutrition)
+      if (refine) {
+        // Keep the entry's date, meal, and logged quantity; rescale macros to
+        // that quantity using the label's per-serving numbers. If the units
+        // aren't comparable, `servingCount` is the user's stepper choice.
+        const auto = servingsForQuantity(food, refine.quantity, refine.unit)
+        const factor = auto ?? servingCount
+        const keepQuantity = Number.isFinite(refine.quantity) && refine.quantity > 0
+        await updateDiaryEntryNutrition(supabase, refine.entryId, {
+          description: food.brand ? `${food.brand} ${food.name}` : food.name,
+          quantity: keepQuantity ? refine.quantity : food.serving_qty * factor,
+          unit: keepQuantity ? refine.unit : food.serving_unit,
+          calories: food.calories * factor,
+          protein: food.protein * factor,
+          carbs: food.carbs * factor,
+          fat: food.fat * factor,
+          source: 'barcode',
+          foodId: food.id,
+        })
       } else {
         await logDiaryEntries(supabase, user.id, [
           {
-            entryDate: todayISODate(),
+            // The log screen passes the diary's selected day, so scans can
+            // land on past days too.
+            entryDate: params.date ?? todayISODate(),
             // Meal is implied from the time of day — we don't ask.
             meal: defaultMealForNow(),
-            ...nutrition,
+            description: food.brand ? `${food.brand} ${food.name}` : food.name,
+            quantity: food.serving_qty * servingCount,
+            unit: food.serving_unit,
+            calories: food.calories * servingCount,
+            protein: food.protein * servingCount,
+            carbs: food.carbs * servingCount,
+            fat: food.fat * servingCount,
+            source: 'barcode',
+            foodId: food.id,
           },
         ])
       }
@@ -130,7 +184,7 @@ export default function ScanBarcodeScreen() {
     )
   }
 
-  if (phase.kind === 'scanning' || phase.kind === 'looking-up') {
+  if (phase.kind === 'scanning') {
     return (
       <View style={styles.cameraWrap}>
         <CameraView
@@ -140,11 +194,7 @@ export default function ScanBarcodeScreen() {
         />
         <View style={styles.cameraOverlay}>
           <Text style={styles.cameraHint}>
-            {phase.kind === 'looking-up'
-              ? 'Looking up…'
-              : refineEntryId
-                ? 'Scan the barcode to replace the estimate'
-                : 'Point at a food barcode'}
+            {refine ? 'Scan the barcode to replace the estimate' : 'Point at a food barcode'}
           </Text>
           {error ? <Text style={styles.cameraError}>{error}</Text> : null}
         </View>
@@ -152,8 +202,24 @@ export default function ScanBarcodeScreen() {
     )
   }
 
+  // The camera unmounts the moment a barcode is read — the scan feels instant
+  // and the user isn't left holding the product up while we look it up.
+  if (phase.kind === 'looking-up') {
+    return (
+      <Screen>
+        <View style={styles.lookupWrap}>
+          <ActivityIndicator size="large" color="#208AEF" />
+          <Text style={styles.lookupTitle}>Got it!</Text>
+          <Text style={styles.lookupSubtitle}>Looking up nutrition facts…</Text>
+        </View>
+      </Screen>
+    )
+  }
+
   if (phase.kind === 'found') {
     const { food } = phase
+    const autoServings = refine ? servingsForQuantity(food, refine.quantity, refine.unit) : null
+    const shownServings = autoServings ?? servings
     return (
       <Screen>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -167,27 +233,34 @@ export default function ScanBarcodeScreen() {
             </Text>
           </View>
 
-          <View style={styles.stepperRow}>
-            <Text style={styles.stepperLabel}>Servings</Text>
-            <View style={styles.stepper}>
-              <StepperButton
-                label="−"
-                onPress={() => setServings((s) => Math.max(0.5, s - 0.5))}
-              />
-              <Text style={styles.stepperValue}>{formatQuantity(servings)}</Text>
-              <StepperButton label="+" onPress={() => setServings((s) => s + 0.5)} />
+          {autoServings != null && refine ? (
+            <Text style={styles.refineNote}>
+              For your logged {formatQuantity(refine.quantity)} {refine.unit}:
+            </Text>
+          ) : (
+            <View style={styles.stepperRow}>
+              <Text style={styles.stepperLabel}>Servings</Text>
+              <View style={styles.stepper}>
+                <StepperButton
+                  label="−"
+                  onPress={() => setServings((s) => Math.max(0.5, s - 0.5))}
+                />
+                <Text style={styles.stepperValue}>{formatQuantity(servings)}</Text>
+                <StepperButton label="+" onPress={() => setServings((s) => s + 0.5)} />
+              </View>
             </View>
-          </View>
+          )}
 
           <Text style={styles.totalLine}>
-            {Math.round(food.calories * servings)} kcal · {Math.round(food.protein * servings)}P /{' '}
-            {Math.round(food.carbs * servings)}C / {Math.round(food.fat * servings)}F
+            {Math.round(food.calories * shownServings)} kcal ·{' '}
+            {Math.round(food.protein * shownServings)}P /{' '}
+            {Math.round(food.carbs * shownServings)}C / {Math.round(food.fat * shownServings)}F
           </Text>
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <Button
-            label={refineEntryId ? 'Replace estimate' : 'Save to diary'}
+            label={refine ? 'Replace estimate' : 'Save to diary'}
             onPress={() => saveFood(food, servings)}
             loading={isSaving}
           />
@@ -419,6 +492,22 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     overflow: 'hidden',
   },
+  lookupWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  lookupTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111',
+    marginTop: 8,
+  },
+  lookupSubtitle: {
+    fontSize: 14,
+    color: '#999',
+  },
   cameraError: {
     color: '#FFB4B4',
     fontSize: 14,
@@ -480,6 +569,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#111',
     minWidth: 32,
+    textAlign: 'center',
+  },
+  refineNote: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111',
     textAlign: 'center',
   },
   totalLine: {

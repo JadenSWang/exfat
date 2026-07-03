@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useState } from 'react'
 import {
   KeyboardAvoidingView,
@@ -13,16 +13,26 @@ import {
 
 import { Button } from '@/components/Button'
 import { Screen } from '@/components/Screen'
-import { submitPendingLog } from '@/lib/pendingLogs'
+import type { NutritionEstimate } from '@/lib/estimate'
+import { parseISODate, todayISODate } from '@/lib/nutrition'
+import { saveEstimateToDiary, simulateMeal, submitPendingLog } from '@/lib/pendingLogs'
 import { useAuth } from '@/providers/auth'
 
 export default function LogFoodScreen() {
   const router = useRouter()
   const queryClient = useQueryClient()
   const { user } = useAuth()
+  // The diary passes the selected day so food can be logged onto past days.
+  const params = useLocalSearchParams<{ date?: string }>()
+  const date = params.date ?? todayISODate()
+  const isToday = date === todayISODate()
 
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
+  // When set, we've previewed an estimate ("simulate") but haven't logged it.
+  const [simulation, setSimulation] = useState<NutritionEstimate | null>(null)
+  const [isSimulating, setIsSimulating] = useState(false)
+  const [isAdding, setIsAdding] = useState(false)
 
   // Fire and forget: kick off the estimate and go straight back to the diary.
   // The entry appears there when the estimate lands (see lib/pendingLogs.ts).
@@ -32,8 +42,43 @@ export default function LogFoodScreen() {
       setError('You need to be signed in to log to your diary.')
       return
     }
-    submitPendingLog(text.trim(), user.id, queryClient)
+    submitPendingLog(text.trim(), user.id, queryClient, date)
     router.back()
+  }
+
+  // Estimate the meal and show the numbers here, without adding anything to the
+  // diary. The user decides afterwards whether to keep it.
+  async function handleSimulate() {
+    if (!text.trim()) return
+    if (!user) {
+      setError('You need to be signed in to simulate a meal.')
+      return
+    }
+    setError(null)
+    setSimulation(null)
+    setIsSimulating(true)
+    try {
+      setSimulation(await simulateMeal(text.trim(), user.id))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not estimate that meal.')
+    } finally {
+      setIsSimulating(false)
+    }
+  }
+
+  // Commit the simulated numbers exactly as previewed — no re-estimate.
+  async function handleAddSimulation() {
+    if (!simulation || !user) return
+    setError(null)
+    setIsAdding(true)
+    try {
+      await saveEstimateToDiary(simulation, user.id, queryClient, date)
+      router.back()
+    } catch {
+      setError('Could not add that to your diary — is the backend running?')
+    } finally {
+      setIsAdding(false)
+    }
   }
 
   return (
@@ -48,7 +93,15 @@ export default function LogFoodScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.field}>
-            <Text style={styles.label}>What did you eat?</Text>
+            <Text style={styles.label}>
+              {isToday
+                ? 'What did you eat?'
+                : `What did you eat on ${parseISODate(date).toLocaleDateString(undefined, {
+                    weekday: 'long',
+                    month: 'short',
+                    day: 'numeric',
+                  })}?`}
+            </Text>
             <TextInput
               style={styles.input}
               value={text}
@@ -73,7 +126,7 @@ export default function LogFoodScreen() {
             <Button
               label="Scan barcode"
               variant="secondary"
-              onPress={() => router.push('/scan')}
+              onPress={() => router.push({ pathname: '/scan', params: { date } })}
             />
             <DisabledButton label="Search database" />
           </View>

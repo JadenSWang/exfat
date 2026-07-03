@@ -1,10 +1,16 @@
-import { updateProfileWeight, upsertNutritionGoals, type WeightUnit } from '@workout/supabase'
+import {
+  updateProfileVitals,
+  upsertNutritionGoals,
+  type BiologicalSex,
+  type WeightUnit,
+} from '@workout/supabase'
 import { useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'expo-router'
 import { useState } from 'react'
 import {
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -12,9 +18,15 @@ import {
 } from 'react-native'
 
 import { Button } from '@/components/Button'
-import { GoalPicker, UnitToggle } from '@/components/ProfileFormControls'
+import {
+  BirthDateInput,
+  GoalPicker,
+  HeightInput,
+  SexPicker,
+  UnitToggle,
+} from '@/components/ProfileFormControls'
 import { Screen } from '@/components/Screen'
-import { goalsFromCalories, suggestCalorieTarget, type Goal } from '@/lib/nutrition'
+import { ageFromBirth, goalsFromCalories, suggestCalorieTarget, type Goal } from '@/lib/nutrition'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/providers/auth'
 
@@ -26,18 +38,38 @@ export default function OnboardingScreen() {
   const [weightText, setWeightText] = useState('')
   const [unit, setUnit] = useState<WeightUnit>('lb')
   const [goal, setGoal] = useState<Goal>('recomp')
+  const [heightCm, setHeightCm] = useState<number | null>(null)
+  const [sex, setSex] = useState<BiologicalSex | null>(null)
+  const [birthMonth, setBirthMonth] = useState('')
+  const [birthYear, setBirthYear] = useState('')
   // Null while the user hasn't touched the target — track the suggestion.
   const [calorieOverride, setCalorieOverride] = useState<number | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Re-suggesting whenever a vital changes means dropping any stale override.
+  const resetSuggestion = () => setCalorieOverride(null)
+
   const weight = Number.parseFloat(weightText)
   const hasWeight = Number.isFinite(weight) && weight > 0
-  const suggested = hasWeight ? suggestCalorieTarget(weight, unit, goal) : null
+  const monthNum = Number.parseInt(birthMonth, 10)
+  const yearNum = Number.parseInt(birthYear, 10)
+  const currentYear = new Date().getFullYear()
+  const hasBirth =
+    monthNum >= 1 &&
+    monthNum <= 12 &&
+    birthYear.length === 4 &&
+    yearNum >= 1900 &&
+    yearNum <= currentYear
+  const age = hasBirth ? ageFromBirth(yearNum, monthNum) : null
+  const hasVitals = hasWeight && heightCm != null && sex != null && hasBirth
+  const suggested = hasVitals
+    ? suggestCalorieTarget({ weight, unit, goal, heightCm, sex, age })
+    : null
   const calories = calorieOverride ?? suggested
 
   async function handleContinue() {
-    if (!hasWeight || !calories || isSaving) return
+    if (!hasVitals || !calories || isSaving) return
     if (!user) {
       setError('You need to be signed in to continue.')
       return
@@ -45,7 +77,14 @@ export default function OnboardingScreen() {
     setError(null)
     setIsSaving(true)
     try {
-      await updateProfileWeight(supabase, user.id, weight, unit)
+      await updateProfileVitals(supabase, user.id, {
+        weight,
+        unit,
+        heightCm,
+        sex,
+        birthYear: yearNum,
+        birthMonth: monthNum,
+      })
       await upsertNutritionGoals(supabase, user.id, goalsFromCalories(calories, weight, unit))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['profile'] }),
@@ -64,11 +103,16 @@ export default function OnboardingScreen() {
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={styles.content}>
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
           <View style={styles.header}>
             <Text style={styles.title}>Welcome</Text>
             <Text style={styles.subtitle}>
-              Two questions and you’re in — we’ll figure out the rest.
+              A few quick details and you’re in — we’ll size your calorie target from them.
             </Text>
           </View>
 
@@ -98,12 +142,51 @@ export default function OnboardingScreen() {
           </View>
 
           <View style={styles.field}>
+            <Text style={styles.label}>Your height</Text>
+            <HeightInput
+              initialCm={null}
+              weightUnit={unit}
+              onChange={(cm) => {
+                setHeightCm(cm)
+                resetSuggestion()
+              }}
+            />
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.label}>Sex</Text>
+            <SexPicker
+              sex={sex}
+              onChange={(next) => {
+                setSex(next)
+                resetSuggestion()
+              }}
+            />
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.label}>Birth month & year</Text>
+            <BirthDateInput
+              month={birthMonth}
+              year={birthYear}
+              onChangeMonth={(value) => {
+                setBirthMonth(value)
+                resetSuggestion()
+              }}
+              onChangeYear={(value) => {
+                setBirthYear(value)
+                resetSuggestion()
+              }}
+            />
+          </View>
+
+          <View style={styles.field}>
             <Text style={styles.label}>Your goal</Text>
             <GoalPicker
               goal={goal}
               onChange={(next) => {
                 setGoal(next)
-                setCalorieOverride(null)
+                resetSuggestion()
               }}
             />
           </View>
@@ -125,7 +208,8 @@ export default function OnboardingScreen() {
                 <Text style={styles.targetUnit}>kcal</Text>
               </View>
               <Text style={styles.targetHint}>
-                Suggested from your weight and goal — tweak it if you know better.
+                Estimated from your height, weight, sex, age, and goal — tweak it if you know
+                better.
               </Text>
             </View>
           ) : null}
@@ -136,9 +220,9 @@ export default function OnboardingScreen() {
             label="Start tracking"
             onPress={handleContinue}
             loading={isSaving}
-            disabled={!hasWeight || !calories}
+            disabled={!hasVitals || !calories}
           />
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
   )
@@ -152,9 +236,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    flex: 1,
+    flexGrow: 1,
     gap: 24,
     paddingTop: 24,
+    paddingBottom: 24,
   },
   header: {
     gap: 8,

@@ -2,8 +2,9 @@ import {
   getNutritionGoals,
   getProfile,
   signOut,
-  updateProfileWeight,
+  updateProfileVitals,
   upsertNutritionGoals,
+  type BiologicalSex,
   type WeightUnit,
 } from '@workout/supabase'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -14,6 +15,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -21,9 +23,15 @@ import {
 } from 'react-native'
 
 import { Button } from '@/components/Button'
-import { GoalPicker, UnitToggle } from '@/components/ProfileFormControls'
+import {
+  BirthDateInput,
+  GoalPicker,
+  HeightInput,
+  SexPicker,
+  UnitToggle,
+} from '@/components/ProfileFormControls'
 import { Screen } from '@/components/Screen'
-import { goalsFromCalories, suggestCalorieTarget, type Goal } from '@/lib/nutrition'
+import { ageFromBirth, goalsFromCalories, suggestCalorieTarget, type Goal } from '@/lib/nutrition'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/providers/auth'
 
@@ -44,12 +52,18 @@ export default function SettingsScreen() {
   const [weightText, setWeightText] = useState('')
   const [unit, setUnit] = useState<WeightUnit>('lb')
   const [goal, setGoal] = useState<Goal>('recomp')
-  // Null while untouched — track the suggestion from weight + goal. Seeded
-  // with the saved target so we don't clobber a hand-picked number.
+  const [heightCm, setHeightCm] = useState<number | null>(null)
+  const [sex, setSex] = useState<BiologicalSex | null>(null)
+  const [birthMonth, setBirthMonth] = useState('')
+  const [birthYear, setBirthYear] = useState('')
+  // Null while untouched — track the suggestion from the vitals. Seeded with the
+  // saved target so we don't clobber a hand-picked number.
   const [calorieOverride, setCalorieOverride] = useState<number | null>(null)
   const [hydrated, setHydrated] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const resetSuggestion = () => setCalorieOverride(null)
 
   // Prefill the form once both queries settle.
   useEffect(() => {
@@ -59,17 +73,34 @@ export default function SettingsScreen() {
       setWeightText(String(profile.weight))
       setUnit(profile.default_unit)
     }
+    if (profile?.height_cm != null) setHeightCm(profile.height_cm)
+    if (profile?.sex) setSex(profile.sex)
+    if (profile?.birth_month != null) setBirthMonth(String(profile.birth_month))
+    if (profile?.birth_year != null) setBirthYear(String(profile.birth_year))
     if (goalsQuery.data) setCalorieOverride(goalsQuery.data.calories)
     setHydrated(true)
   }, [hydrated, profileQuery.isLoading, profileQuery.data, goalsQuery.isLoading, goalsQuery.data])
 
   const weight = Number.parseFloat(weightText)
   const hasWeight = Number.isFinite(weight) && weight > 0
-  const suggested = hasWeight ? suggestCalorieTarget(weight, unit, goal) : null
+  const monthNum = Number.parseInt(birthMonth, 10)
+  const yearNum = Number.parseInt(birthYear, 10)
+  const currentYear = new Date().getFullYear()
+  const hasBirth =
+    monthNum >= 1 &&
+    monthNum <= 12 &&
+    birthYear.length === 4 &&
+    yearNum >= 1900 &&
+    yearNum <= currentYear
+  const age = hasBirth ? ageFromBirth(yearNum, monthNum) : null
+  const hasVitals = hasWeight && heightCm != null && sex != null && hasBirth
+  const suggested = hasVitals
+    ? suggestCalorieTarget({ weight, unit, goal, heightCm, sex, age })
+    : null
   const calories = calorieOverride ?? suggested
 
   async function handleSave() {
-    if (!hasWeight || !calories || isSaving) return
+    if (!hasVitals || !calories || isSaving) return
     if (!user) {
       setError('You need to be signed in to save.')
       return
@@ -77,7 +108,14 @@ export default function SettingsScreen() {
     setError(null)
     setIsSaving(true)
     try {
-      await updateProfileWeight(supabase, user.id, weight, unit)
+      await updateProfileVitals(supabase, user.id, {
+        weight,
+        unit,
+        heightCm,
+        sex,
+        birthYear: yearNum,
+        birthMonth: monthNum,
+      })
       await upsertNutritionGoals(supabase, user.id, goalsFromCalories(calories, weight, unit))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['profile'] }),
@@ -107,7 +145,12 @@ export default function SettingsScreen() {
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={styles.content}>
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
           <View style={styles.field}>
             <Text style={styles.label}>Your weight</Text>
             <View style={styles.weightRow}>
@@ -133,12 +176,51 @@ export default function SettingsScreen() {
           </View>
 
           <View style={styles.field}>
+            <Text style={styles.label}>Your height</Text>
+            <HeightInput
+              initialCm={profileQuery.data?.height_cm ?? null}
+              weightUnit={unit}
+              onChange={(cm) => {
+                setHeightCm(cm)
+                resetSuggestion()
+              }}
+            />
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.label}>Sex</Text>
+            <SexPicker
+              sex={sex}
+              onChange={(next) => {
+                setSex(next)
+                resetSuggestion()
+              }}
+            />
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.label}>Birth month & year</Text>
+            <BirthDateInput
+              month={birthMonth}
+              year={birthYear}
+              onChangeMonth={(value) => {
+                setBirthMonth(value)
+                resetSuggestion()
+              }}
+              onChangeYear={(value) => {
+                setBirthYear(value)
+                resetSuggestion()
+              }}
+            />
+          </View>
+
+          <View style={styles.field}>
             <Text style={styles.label}>Your goal</Text>
             <GoalPicker
               goal={goal}
               onChange={(next) => {
                 setGoal(next)
-                setCalorieOverride(null)
+                resetSuggestion()
               }}
             />
           </View>
@@ -160,7 +242,7 @@ export default function SettingsScreen() {
                 <Text style={styles.targetUnit}>kcal</Text>
               </View>
               <Text style={styles.targetHint}>
-                Change your weight or goal to get a fresh suggestion, or type your own number.
+                Change any of your details to get a fresh suggestion, or type your own number.
               </Text>
             </View>
           ) : null}
@@ -171,13 +253,13 @@ export default function SettingsScreen() {
             label="Save"
             onPress={handleSave}
             loading={isSaving}
-            disabled={!hasWeight || !calories}
+            disabled={!hasVitals || !calories}
           />
 
           <Pressable accessibilityRole="button" onPress={() => signOut(supabase)} hitSlop={8}>
             <Text style={styles.signOut}>Sign out</Text>
           </Pressable>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
   )
@@ -196,9 +278,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   content: {
-    flex: 1,
+    flexGrow: 1,
     gap: 24,
     paddingTop: 24,
+    paddingBottom: 24,
   },
   field: {
     gap: 8,

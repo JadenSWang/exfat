@@ -1,5 +1,5 @@
 import type { DailyGoals, DiaryItem, MealType } from '@workout/core'
-import type { Tables, WeightUnit } from '@workout/supabase'
+import type { BiologicalSex, Tables, WeightUnit } from '@workout/supabase'
 
 /**
  * Sensible fallback targets used when the user has no saved goals yet or the
@@ -15,7 +15,10 @@ export const DEFAULT_GOALS: DailyGoals = {
 /** What the user wants out of their calorie target. */
 export type Goal = 'lose' | 'recomp' | 'bulk'
 
-/** kcal per lb of body weight, per goal (~14 kcal/lb is maintenance). */
+const LB_PER_KG = 2.20462
+
+/** kcal per lb of body weight, per goal (~14 kcal/lb is maintenance). Used as a
+ *  fallback when we lack the height/sex/age needed for a real BMR estimate. */
 const GOAL_MULTIPLIER: Record<Goal, number> = {
   lose: 10, // aggressive deficit
   recomp: 14, // maintenance
@@ -23,13 +26,66 @@ const GOAL_MULTIPLIER: Record<Goal, number> = {
 }
 
 /**
- * Suggest a daily calorie target from body weight and goal: the goal picks a
- * kcal-per-lb multiplier around the ~14 kcal/lb maintenance rule of thumb,
- * rounded to the nearest 50.
+ * Maintenance (TDEE) multiplier applied to resting BMR. We don't ask for an
+ * activity level (one fewer onboarding question), so we assume "lightly
+ * active" — a reasonable middle for most people.
  */
-export function suggestCalorieTarget(weight: number, unit: WeightUnit, goal: Goal = 'recomp'): number {
-  const lbs = unit === 'kg' ? weight * 2.20462 : weight
-  return Math.max(Math.round((lbs * GOAL_MULTIPLIER[goal]) / 50) * 50, 1200)
+const ACTIVITY_FACTOR = 1.45
+
+/** How each goal shifts maintenance calories: deficit, maintenance, surplus. */
+const GOAL_FACTOR: Record<Goal, number> = {
+  lose: 0.8,
+  recomp: 1.0,
+  bulk: 1.15,
+}
+
+/** Round a raw kcal figure to the nearest 50, with a sane 1200 kcal floor. */
+function clampTarget(calories: number): number {
+  return Math.max(Math.round(calories / 50) * 50, 1200)
+}
+
+/**
+ * Approximate age in whole years from a birth year/month. We only store month
+ * granularity, so the result can be off by up to a year — fine for BMR. Clamped
+ * to a plausible adult range so a fat-fingered year can't wreck the estimate.
+ */
+export function ageFromBirth(birthYear: number, birthMonth: number, now = new Date()): number {
+  let age = now.getFullYear() - birthYear
+  // getMonth() is 0-based; birthMonth is 1-based. If this year's birth month
+  // hasn't arrived yet, they're a year younger than the raw difference.
+  if (now.getMonth() + 1 < birthMonth) age -= 1
+  return Math.min(Math.max(age, 14), 100)
+}
+
+/** Inputs to a calorie-target suggestion. Height/sex/age are optional; without
+ *  the full set we fall back to a simpler weight-only heuristic. */
+export interface CalorieTargetInput {
+  weight: number
+  unit: WeightUnit
+  goal: Goal
+  heightCm?: number | null
+  sex?: BiologicalSex | null
+  age?: number | null
+}
+
+/**
+ * Suggest a daily calorie target. With height, sex, and age we use the
+ * Mifflin–St Jeor equation (resting BMR × an assumed activity factor, then
+ * nudged by the goal). Missing any of those, we fall back to the older
+ * kcal-per-lb heuristic so pre-height profiles still get a number.
+ */
+export function suggestCalorieTarget(input: CalorieTargetInput): number {
+  const { weight, unit, goal, heightCm, sex, age } = input
+  const kg = unit === 'kg' ? weight : weight / LB_PER_KG
+
+  if (heightCm && heightCm > 0 && sex && age) {
+    // Mifflin–St Jeor resting metabolic rate (kcal/day).
+    const bmr = 10 * kg + 6.25 * heightCm - 5 * age + (sex === 'male' ? 5 : -161)
+    return clampTarget(bmr * ACTIVITY_FACTOR * GOAL_FACTOR[goal])
+  }
+
+  const lbs = kg * LB_PER_KG
+  return clampTarget(lbs * GOAL_MULTIPLIER[goal])
 }
 
 /**

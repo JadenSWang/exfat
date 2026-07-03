@@ -17,6 +17,10 @@ export type Database = {
           display_name: string | null
           default_unit: Database['public']['Enums']['weight_unit']
           weight: number | null
+          height_cm: number | null
+          sex: Database['public']['Enums']['biological_sex'] | null
+          birth_year: number | null
+          birth_month: number | null
           created_at: string
           updated_at: string
         }
@@ -25,6 +29,10 @@ export type Database = {
           display_name?: string | null
           default_unit?: Database['public']['Enums']['weight_unit']
           weight?: number | null
+          height_cm?: number | null
+          sex?: Database['public']['Enums']['biological_sex'] | null
+          birth_year?: number | null
+          birth_month?: number | null
           created_at?: string
           updated_at?: string
         }
@@ -33,6 +41,10 @@ export type Database = {
           display_name?: string | null
           default_unit?: Database['public']['Enums']['weight_unit']
           weight?: number | null
+          height_cm?: number | null
+          sex?: Database['public']['Enums']['biological_sex'] | null
+          birth_year?: number | null
+          birth_month?: number | null
           created_at?: string
           updated_at?: string
         }
@@ -451,6 +463,7 @@ export type Database = {
     }
     Enums: {
       weight_unit: 'kg' | 'lb'
+      biological_sex: 'male' | 'female'
       set_type: 'normal' | 'warmup' | 'dropset' | 'failure'
       muscle_group:
         | 'chest'

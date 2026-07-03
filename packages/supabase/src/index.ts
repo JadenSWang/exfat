@@ -11,7 +11,13 @@ export {
 
 export { signInWithApple, signOut } from './auth'
 
-export { getProfile, updateProfileWeight, type WeightUnit } from './profiles'
+export {
+  getProfile,
+  updateProfileVitals,
+  type WeightUnit,
+  type BiologicalSex,
+  type ProfileVitals,
+} from './profiles'
 
 export {
   estimateNutrition,

@@ -12,6 +12,8 @@ export interface DailyGoals extends MacroNutrients {}
 
 /** A confirmed food entry in the user's daily diary. Macros are in grams. */
 export interface DiaryItem {
+  /** Persisted diary entry id, so UI actions (e.g. refining an estimate) can target the row. */
+  id: string
   /** Human-readable food name. */
   name: string
   /** Meal this entry is logged under. */

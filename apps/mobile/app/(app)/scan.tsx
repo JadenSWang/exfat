@@ -1,8 +1,13 @@
 import type { Tables } from '@workout/supabase'
-import { logDiaryEntries, lookupBarcode, submitBarcodeFood } from '@workout/supabase'
+import {
+  logDiaryEntries,
+  lookupBarcode,
+  submitBarcodeFood,
+  updateDiaryEntryNutrition,
+} from '@workout/supabase'
 import { useQueryClient } from '@tanstack/react-query'
 import { CameraView, useCameraPermissions } from 'expo-camera'
-import { useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useRef, useState } from 'react'
 import {
   KeyboardAvoidingView,
@@ -34,6 +39,9 @@ export default function ScanBarcodeScreen() {
   const router = useRouter()
   const queryClient = useQueryClient()
   const { user } = useAuth()
+  // When set, we're refining an existing AI-estimated diary entry: the scanned
+  // product replaces that entry's nutrition instead of logging a new one.
+  const { refineEntryId } = useLocalSearchParams<{ refineEntryId?: string }>()
   const [permission, requestPermission] = useCameraPermissions()
 
   const [phase, setPhase] = useState<Phase>({ kind: 'scanning' })
@@ -75,24 +83,31 @@ export default function ScanBarcodeScreen() {
     setError(null)
     setIsSaving(true)
     try {
-      const entryDate = todayISODate()
-      await logDiaryEntries(supabase, user.id, [
-        {
-          entryDate,
-          // Meal is implied from the time of day — we don't ask.
-          meal: defaultMealForNow(),
-          description: food.brand ? `${food.brand} ${food.name}` : food.name,
-          quantity: food.serving_qty * servingCount,
-          unit: food.serving_unit,
-          calories: food.calories * servingCount,
-          protein: food.protein * servingCount,
-          carbs: food.carbs * servingCount,
-          fat: food.fat * servingCount,
-          source: 'barcode',
-          foodId: food.id,
-        },
-      ])
-      await queryClient.invalidateQueries({ queryKey: ['diary', entryDate] })
+      const nutrition = {
+        description: food.brand ? `${food.brand} ${food.name}` : food.name,
+        quantity: food.serving_qty * servingCount,
+        unit: food.serving_unit,
+        calories: food.calories * servingCount,
+        protein: food.protein * servingCount,
+        carbs: food.carbs * servingCount,
+        fat: food.fat * servingCount,
+        source: 'barcode' as const,
+        foodId: food.id,
+      }
+      if (refineEntryId) {
+        // Keep the entry's date and meal; swap the estimate for label-accurate data.
+        await updateDiaryEntryNutrition(supabase, refineEntryId, nutrition)
+      } else {
+        await logDiaryEntries(supabase, user.id, [
+          {
+            entryDate: todayISODate(),
+            // Meal is implied from the time of day — we don't ask.
+            meal: defaultMealForNow(),
+            ...nutrition,
+          },
+        ])
+      }
+      await queryClient.invalidateQueries({ queryKey: ['diary'] })
       router.back()
     } catch {
       setError('Could not save to your diary — is the backend running?')
@@ -125,7 +140,11 @@ export default function ScanBarcodeScreen() {
         />
         <View style={styles.cameraOverlay}>
           <Text style={styles.cameraHint}>
-            {phase.kind === 'looking-up' ? 'Looking up…' : 'Point at a food barcode'}
+            {phase.kind === 'looking-up'
+              ? 'Looking up…'
+              : refineEntryId
+                ? 'Scan the barcode to replace the estimate'
+                : 'Point at a food barcode'}
           </Text>
           {error ? <Text style={styles.cameraError}>{error}</Text> : null}
         </View>
@@ -167,7 +186,11 @@ export default function ScanBarcodeScreen() {
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          <Button label="Save to diary" onPress={() => saveFood(food, servings)} loading={isSaving} />
+          <Button
+            label={refineEntryId ? 'Replace estimate' : 'Save to diary'}
+            onPress={() => saveFood(food, servings)}
+            loading={isSaving}
+          />
           <Button label="Scan again" variant="secondary" onPress={resetScanner} />
         </ScrollView>
       </Screen>

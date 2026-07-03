@@ -145,7 +145,7 @@ export function submitPendingLog(text: string, userId: string, queryClient: Quer
         source: 'ai_estimate',
       }))
       await logDiaryEntries(supabase, userId, entries)
-      await queryClient.invalidateQueries({ queryKey: ['diary', entryDate] })
+      await queryClient.invalidateQueries({ queryKey: ['diary'] })
       remove(localId)
     } catch (e) {
       update(localId, {

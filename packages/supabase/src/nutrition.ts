@@ -83,6 +83,55 @@ export async function logDiaryEntries(
 }
 
 /**
+ * Replace a diary entry's food and nutrition in place — used when the user
+ * refines an AI estimate by scanning the product's barcode. The entry's date
+ * and meal are preserved; only what the food is (and its macros) changes.
+ */
+export async function updateDiaryEntryNutrition(
+  client: WorkoutSupabaseClient,
+  entryId: string,
+  update: {
+    description: string
+    quantity: number
+    unit: FoodUnit
+    calories: number
+    protein: number
+    carbs: number
+    fat: number
+    source: FoodSource
+    foodId?: string | null
+  },
+): Promise<void> {
+  const { error } = await client
+    .from('diary_entries')
+    .update({
+      description: update.description,
+      quantity: update.quantity,
+      unit: update.unit,
+      calories: update.calories,
+      protein: update.protein,
+      carbs: update.carbs,
+      fat: update.fat,
+      source: update.source,
+      is_estimate: update.source === 'ai_estimate',
+      food_id: update.foodId ?? null,
+    })
+    .eq('id', entryId)
+  if (error) throw error
+}
+
+/**
+ * Delete a single diary entry by id.
+ */
+export async function deleteDiaryEntry(
+  client: WorkoutSupabaseClient,
+  entryId: string,
+): Promise<void> {
+  const { error } = await client.from('diary_entries').delete().eq('id', entryId)
+  if (error) throw error
+}
+
+/**
  * Fetch a single day's diary entries (by `entry_date`), oldest logged first.
  */
 export async function getDiaryEntries(
@@ -96,6 +145,28 @@ export async function getDiaryEntries(
     .order('created_at', { ascending: true })
   if (error) throw error
   return data ?? []
+}
+
+/**
+ * Sum calories per day over an inclusive `entry_date` range. Days with no
+ * entries are absent from the result.
+ */
+export async function getDailyCalorieTotals(
+  client: WorkoutSupabaseClient,
+  startDate: string,
+  endDate: string,
+): Promise<Record<string, number>> {
+  const { data, error } = await client
+    .from('diary_entries')
+    .select('entry_date, calories')
+    .gte('entry_date', startDate)
+    .lte('entry_date', endDate)
+  if (error) throw error
+  const totals: Record<string, number> = {}
+  for (const row of data ?? []) {
+    totals[row.entry_date] = (totals[row.entry_date] ?? 0) + row.calories
+  }
+  return totals
 }
 
 /**

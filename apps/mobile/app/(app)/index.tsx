@@ -6,11 +6,26 @@ import {
   type DiaryItem,
   type MealType,
 } from '@workout/core'
-import { getDiaryEntries, getNutritionGoals } from '@workout/supabase'
-import { useQuery } from '@tanstack/react-query'
+import {
+  deleteDiaryEntry,
+  getDailyCalorieTotals,
+  getDiaryEntries,
+  getNutritionGoals,
+} from '@workout/supabase'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'expo-router'
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { useState } from 'react'
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native'
 
+import { DAY_STRIP_LENGTH, DayStrip } from '@/components/DayStrip'
 import { EstimateTag } from '@/components/EstimateTag'
 import { MacroBar } from '@/components/MacroBar'
 import { Screen } from '@/components/Screen'
@@ -18,7 +33,9 @@ import {
   DEFAULT_GOALS,
   MEAL_LABELS,
   MEAL_ORDER,
+  parseISODate,
   rowToDiaryItem,
+  shiftISODate,
   todayISODate,
 } from '@/lib/nutrition'
 import { dismissPendingLog, usePendingLogs, type PendingLog } from '@/lib/pendingLogs'
@@ -30,10 +47,8 @@ const PRETTY_DATE = new Intl.DateTimeFormat('en-US', {
   day: 'numeric',
 })
 
-/** Load today's goals + entries. Resilient: any failure falls back to defaults. */
-function useToday() {
-  const date = todayISODate()
-
+/** Load goals + entries for a given day. Resilient: any failure falls back to defaults. */
+function useDiaryDay(date: string) {
   const goalsQuery = useQuery({
     queryKey: ['nutrition-goals'],
     queryFn: async () => {
@@ -73,8 +88,34 @@ function useToday() {
   }
 }
 
+/** Calories consumed per day over the strip's window, for the day rings. */
+function useCalorieTotals(today: string) {
+  const start = shiftISODate(today, -(DAY_STRIP_LENGTH - 1))
+  const query = useQuery({
+    queryKey: ['diary', 'totals', today],
+    queryFn: async (): Promise<Record<string, number>> => {
+      try {
+        return await getDailyCalorieTotals(supabase, start, today)
+      } catch {
+        return {}
+      }
+    },
+  })
+  return query.data ?? {}
+}
+
+function dayTitle(date: string, today: string): string {
+  if (date === today) return 'Today'
+  if (date === shiftISODate(today, -1)) return 'Yesterday'
+  return PRETTY_DATE.format(parseISODate(date)).split(',')[0]
+}
+
 export default function DiaryScreen() {
-  const { goals, items } = useToday()
+  const today = todayISODate()
+  const [date, setDate] = useState(today)
+  const isToday = date === today
+  const { goals, items } = useDiaryDay(date)
+  const calorieTotals = useCalorieTotals(today)
   const pendingLogs = usePendingLogs()
 
   const consumed = sumMacros(items)
@@ -89,8 +130,8 @@ export default function DiaryScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.headerRow}>
           <View>
-            <Text style={styles.today}>Today</Text>
-            <Text style={styles.date}>{PRETTY_DATE.format(new Date())}</Text>
+            <Text style={styles.today}>{dayTitle(date, today)}</Text>
+            <Text style={styles.date}>{PRETTY_DATE.format(parseISODate(date))}</Text>
           </View>
           <Link href="/settings" asChild>
             <Pressable accessibilityRole="button" hitSlop={8}>
@@ -98,6 +139,13 @@ export default function DiaryScreen() {
             </Pressable>
           </Link>
         </View>
+
+        <DayStrip
+          selected={date}
+          onSelect={setDate}
+          calorieTotals={calorieTotals}
+          calorieGoal={goals.calories}
+        />
 
         <View style={styles.summaryCard}>
           <View style={styles.calorieHeader}>
@@ -126,7 +174,7 @@ export default function DiaryScreen() {
           </View>
         </View>
 
-        {pendingLogs.length > 0 ? (
+        {isToday && pendingLogs.length > 0 ? (
           <View style={styles.pendingList}>
             {pendingLogs.map((log) => (
               <PendingRow key={log.id} log={log} />
@@ -142,19 +190,26 @@ export default function DiaryScreen() {
           </View>
         ) : (
           <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>Nothing logged yet</Text>
-            <Text style={styles.emptyBody}>
-              Tap “+ Log food” and describe what you ate — we’ll estimate the calories and macros.
+            <Text style={styles.emptyTitle}>
+              {isToday ? 'Nothing logged yet' : 'Nothing logged this day'}
             </Text>
+            {isToday ? (
+              <Text style={styles.emptyBody}>
+                Tap “+ Log food” and describe what you ate — we’ll estimate the calories and
+                macros.
+              </Text>
+            ) : null}
           </View>
         )}
       </ScrollView>
 
-      <Link href="/log" asChild>
-        <Pressable accessibilityRole="button" style={styles.logButton}>
-          <Text style={styles.logButtonLabel}>+ Log food</Text>
-        </Pressable>
-      </Link>
+      {isToday ? (
+        <Link href="/log" asChild>
+          <Pressable accessibilityRole="button" style={styles.logButton}>
+            <Text style={styles.logButtonLabel}>+ Log food</Text>
+          </Pressable>
+        </Link>
+      ) : null}
     </Screen>
   )
 }
@@ -183,8 +238,22 @@ function PendingRow({ log }: { log: PendingLog }) {
 }
 
 function MealSection({ meal, items }: { meal: MealType; items: DiaryItem[] }) {
+  const queryClient = useQueryClient()
+  const deleteMutation = useMutation({
+    mutationFn: (entryId: string) => deleteDiaryEntry(supabase, entryId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['diary'] }),
+    onError: () => Alert.alert('Couldn’t delete', 'Something went wrong. Please try again.'),
+  })
+
   if (items.length === 0) return null
   const total = sumMacros(items)
+
+  const confirmDelete = (item: DiaryItem) => {
+    Alert.alert('Delete this entry?', item.name, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => deleteMutation.mutate(item.id) },
+    ])
+  }
 
   return (
     <View style={styles.mealSection}>
@@ -192,8 +261,8 @@ function MealSection({ meal, items }: { meal: MealType; items: DiaryItem[] }) {
         <Text style={styles.mealTitle}>{MEAL_LABELS[meal]}</Text>
         <Text style={styles.mealCalories}>{Math.round(total.calories)} kcal</Text>
       </View>
-      {items.map((item, index) => (
-        <View key={`${meal}-${index}`} style={styles.entryRow}>
+      {items.map((item) => (
+        <View key={item.id} style={styles.entryRow}>
           <View style={styles.entryMain}>
             <Text style={styles.entryName} numberOfLines={1}>
               {item.name}
@@ -202,10 +271,31 @@ function MealSection({ meal, items }: { meal: MealType; items: DiaryItem[] }) {
               <Text style={styles.entryQty}>
                 {formatQuantity(item.quantity)} {item.unit}
               </Text>
-              {item.source === 'ai_estimate' ? <EstimateTag /> : null}
+              {item.source === 'ai_estimate' ? (
+                <>
+                  <EstimateTag />
+                  <Link href={{ pathname: '/scan', params: { refineEntryId: item.id } }} asChild>
+                    <Pressable accessibilityRole="button" hitSlop={8}>
+                      <Text style={styles.entryScan}>Scan</Text>
+                    </Pressable>
+                  </Link>
+                </>
+              ) : null}
             </View>
           </View>
-          <Text style={styles.entryCalories}>{Math.round(item.calories)}</Text>
+          <View style={styles.entryNumbers}>
+            <Text style={styles.entryCalories}>{Math.round(item.calories)}</Text>
+            <Text style={styles.entryProtein}>{Math.round(item.protein)}g protein</Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Delete ${item.name}`}
+            onPress={() => confirmDelete(item)}
+            hitSlop={8}
+            style={styles.entryDelete}
+          >
+            <Text style={styles.entryDeleteLabel}>✕</Text>
+          </Pressable>
         </View>
       ))}
     </View>
@@ -360,10 +450,31 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#999',
   },
+  entryScan: {
+    fontSize: 13,
+    color: '#208AEF',
+    fontWeight: '600',
+  },
+  entryNumbers: {
+    alignItems: 'flex-end',
+    gap: 2,
+  },
   entryCalories: {
     fontSize: 16,
     fontWeight: '600',
     color: '#111',
+  },
+  entryProtein: {
+    fontSize: 12,
+    color: '#999',
+  },
+  entryDelete: {
+    paddingLeft: 4,
+  },
+  entryDeleteLabel: {
+    fontSize: 15,
+    color: '#C7C7CC',
+    fontWeight: '600',
   },
   empty: {
     paddingVertical: 40,

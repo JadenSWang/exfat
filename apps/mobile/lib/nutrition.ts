@@ -69,6 +69,21 @@ export function todayISODate(): string {
   return `${year}-${month}-${day}`
 }
 
+/** Shift a `YYYY-MM-DD` date string by a number of days. */
+export function shiftISODate(date: string, days: number): string {
+  const [year, month, day] = date.split('-').map(Number)
+  const shifted = new Date(year, month - 1, day + days)
+  const m = String(shifted.getMonth() + 1).padStart(2, '0')
+  const d = String(shifted.getDate()).padStart(2, '0')
+  return `${shifted.getFullYear()}-${m}-${d}`
+}
+
+/** Parse a `YYYY-MM-DD` string as a local-time Date (avoids the UTC shift of `new Date(string)`). */
+export function parseISODate(date: string): Date {
+  const [year, month, day] = date.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
 /** Guess a default meal from the current hour of day. */
 export function defaultMealForNow(date = new Date()): MealType {
   const hour = date.getHours()
@@ -84,6 +99,7 @@ export function defaultMealForNow(date = new Date()): MealType {
  */
 export function rowToDiaryItem(row: Tables<'diary_entries'>): DiaryItem {
   return {
+    id: row.id,
     name: row.description,
     meal: row.meal,
     quantity: row.quantity,

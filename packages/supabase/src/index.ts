@@ -16,7 +16,10 @@ export { getProfile, updateProfileWeight, type WeightUnit } from './profiles'
 export {
   estimateNutrition,
   logDiaryEntries,
+  updateDiaryEntryNutrition,
+  deleteDiaryEntry,
   getDiaryEntries,
+  getDailyCalorieTotals,
   getNutritionGoals,
   upsertNutritionGoals,
   type NutritionEstimate,

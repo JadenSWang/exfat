@@ -6,10 +6,10 @@ import {
   type DiaryItem,
   type MealType,
 } from '@workout/core'
-import { getDiaryEntries, getNutritionGoals, signOut } from '@workout/supabase'
+import { getDiaryEntries, getNutritionGoals } from '@workout/supabase'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'expo-router'
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 
 import { EstimateTag } from '@/components/EstimateTag'
 import { MacroBar } from '@/components/MacroBar'
@@ -21,6 +21,7 @@ import {
   rowToDiaryItem,
   todayISODate,
 } from '@/lib/nutrition'
+import { dismissPendingLog, usePendingLogs, type PendingLog } from '@/lib/pendingLogs'
 import { supabase } from '@/lib/supabase'
 
 const PRETTY_DATE = new Intl.DateTimeFormat('en-US', {
@@ -74,6 +75,7 @@ function useToday() {
 
 export default function DiaryScreen() {
   const { goals, items } = useToday()
+  const pendingLogs = usePendingLogs()
 
   const consumed = sumMacros(items)
   const remaining = remainingMacros(goals, consumed)
@@ -81,10 +83,6 @@ export default function DiaryScreen() {
   const caloriePct = goals.calories > 0 ? Math.min(consumed.calories / goals.calories, 1) : 0
   const byMeal = groupByMeal(items)
   const hasEntries = items.length > 0
-
-  async function handleSignOut() {
-    await signOut(supabase)
-  }
 
   return (
     <Screen style={styles.screen}>
@@ -94,9 +92,11 @@ export default function DiaryScreen() {
             <Text style={styles.today}>Today</Text>
             <Text style={styles.date}>{PRETTY_DATE.format(new Date())}</Text>
           </View>
-          <Pressable accessibilityRole="button" onPress={handleSignOut} hitSlop={8}>
-            <Text style={styles.signOut}>Sign out</Text>
-          </Pressable>
+          <Link href="/settings" asChild>
+            <Pressable accessibilityRole="button" hitSlop={8}>
+              <Text style={styles.settingsLink}>Settings</Text>
+            </Pressable>
+          </Link>
         </View>
 
         <View style={styles.summaryCard}>
@@ -126,6 +126,14 @@ export default function DiaryScreen() {
           </View>
         </View>
 
+        {pendingLogs.length > 0 ? (
+          <View style={styles.pendingList}>
+            {pendingLogs.map((log) => (
+              <PendingRow key={log.id} log={log} />
+            ))}
+          </View>
+        ) : null}
+
         {hasEntries ? (
           <View style={styles.meals}>
             {MEAL_ORDER.map((meal) => (
@@ -148,6 +156,29 @@ export default function DiaryScreen() {
         </Pressable>
       </Link>
     </Screen>
+  )
+}
+
+function PendingRow({ log }: { log: PendingLog }) {
+  const failed = log.status === 'error'
+  return (
+    <View style={[styles.pendingCard, failed && styles.pendingCardError]}>
+      <View style={styles.entryMain}>
+        <Text style={styles.entryName} numberOfLines={1}>
+          {log.text}
+        </Text>
+        <Text style={failed ? styles.pendingError : styles.pendingStatus}>
+          {failed ? log.error : log.status === 'saving' ? 'Saving…' : 'Estimating…'}
+        </Text>
+      </View>
+      {failed ? (
+        <Pressable accessibilityRole="button" onPress={() => dismissPendingLog(log.id)} hitSlop={8}>
+          <Text style={styles.pendingDismiss}>Dismiss</Text>
+        </Pressable>
+      ) : (
+        <ActivityIndicator size="small" color="#208AEF" />
+      )}
+    </View>
   )
 }
 
@@ -207,7 +238,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#999',
   },
-  signOut: {
+  settingsLink: {
     fontSize: 15,
     color: '#208AEF',
     fontWeight: '600',
@@ -253,6 +284,37 @@ const styles = StyleSheet.create({
   },
   meals: {
     gap: 20,
+  },
+  pendingList: {
+    gap: 8,
+  },
+  pendingCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E4E4E9',
+    backgroundColor: '#F7F7F9',
+    padding: 12,
+  },
+  pendingCardError: {
+    borderColor: '#F3C2C2',
+    backgroundColor: '#FDF3F3',
+  },
+  pendingStatus: {
+    fontSize: 13,
+    color: '#999',
+  },
+  pendingError: {
+    fontSize: 13,
+    color: '#d00',
+    lineHeight: 18,
+  },
+  pendingDismiss: {
+    fontSize: 13,
+    color: '#d00',
+    fontWeight: '600',
   },
   mealSection: {
     gap: 8,

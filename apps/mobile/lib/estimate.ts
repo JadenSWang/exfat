@@ -37,3 +37,40 @@ export async function estimateNutrition(text: string): Promise<NutritionEstimate
   }
   return (await res.json()) as NutritionEstimate
 }
+
+export interface EstimateJobStatus {
+  status: 'pending' | 'done' | 'error'
+  result?: NutritionEstimate
+  error?: string
+}
+
+function authHeaders(): Record<string, string> {
+  return ESTIMATE_TOKEN ? { 'x-exfat-token': ESTIMATE_TOKEN } : {}
+}
+
+/**
+ * Kick off a fire-and-forget estimate job. Returns immediately with a job id
+ * to poll via {@link getEstimateJob} — big meals can take longer than the
+ * platform fetch timeout, so we never wait on a single long request.
+ */
+export async function startEstimateJob(text: string): Promise<string> {
+  const res = await fetch(`${ESTIMATE_URL}/jobs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ text }),
+  })
+  if (!res.ok) {
+    throw new Error(`Estimator responded ${res.status}`)
+  }
+  const { id } = (await res.json()) as { id: string }
+  return id
+}
+
+/** Poll the status of a job started with {@link startEstimateJob}. */
+export async function getEstimateJob(id: string): Promise<EstimateJobStatus> {
+  const res = await fetch(`${ESTIMATE_URL}/jobs/${id}`, { headers: authHeaders() })
+  if (!res.ok) {
+    throw new Error(`Estimator responded ${res.status}`)
+  }
+  return (await res.json()) as EstimateJobStatus
+}

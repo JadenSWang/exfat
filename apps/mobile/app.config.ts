@@ -14,18 +14,24 @@ const config: ExpoConfig & { newArchEnabled?: boolean } = {
   name: 'exFat',
   slug: 'exfat',
   scheme: 'exfat',
-  version: '0.0.0',
+  owner: 'jadenswang',
+  version: '1.0.0',
   orientation: 'portrait',
   icon: './assets/images/icon.png',
   userInterfaceStyle: 'automatic',
   newArchEnabled: true,
   ios: {
-    bundleIdentifier: 'com.workout.app',
+    bundleIdentifier: 'health.exfat.app',
     usesAppleSignIn: true,
     supportsTablet: false,
+    infoPlist: {
+      // App uses only standard/exempt encryption (HTTPS/TLS) — declare exempt so
+      // App Store Connect doesn't ask on every submission.
+      ITSAppUsesNonExemptEncryption: false,
+    },
   },
   android: {
-    package: 'com.workout.app',
+    package: 'health.exfat.app',
     adaptiveIcon: {
       backgroundColor: '#E6F4FE',
       foregroundImage: './assets/images/android-icon-foreground.png',
@@ -58,6 +64,11 @@ const config: ExpoConfig & { newArchEnabled?: boolean } = {
   ],
   experiments: {
     typedRoutes: true,
+  },
+  extra: {
+    eas: {
+      projectId: 'fd4e01e5-16ba-4f81-b6cd-6367d8a0c3d6',
+    },
   },
 }
 

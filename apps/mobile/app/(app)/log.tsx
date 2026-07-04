@@ -13,9 +13,8 @@ import {
 
 import { Button } from '@/components/Button'
 import { Screen } from '@/components/Screen'
-import type { NutritionEstimate } from '@/lib/estimate'
 import { parseISODate, todayISODate } from '@/lib/nutrition'
-import { saveEstimateToDiary, simulateMeal, submitPendingLog } from '@/lib/pendingLogs'
+import { submitPendingLog } from '@/lib/pendingLogs'
 import { useAuth } from '@/providers/auth'
 
 export default function LogFoodScreen() {
@@ -29,10 +28,6 @@ export default function LogFoodScreen() {
 
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
-  // When set, we've previewed an estimate ("simulate") but haven't logged it.
-  const [simulation, setSimulation] = useState<NutritionEstimate | null>(null)
-  const [isSimulating, setIsSimulating] = useState(false)
-  const [isAdding, setIsAdding] = useState(false)
 
   // Fire and forget: kick off the estimate and go straight back to the diary.
   // The entry appears there when the estimate lands (see lib/pendingLogs.ts).
@@ -44,41 +39,6 @@ export default function LogFoodScreen() {
     }
     submitPendingLog(text.trim(), user.id, queryClient, date)
     router.back()
-  }
-
-  // Estimate the meal and show the numbers here, without adding anything to the
-  // diary. The user decides afterwards whether to keep it.
-  async function handleSimulate() {
-    if (!text.trim()) return
-    if (!user) {
-      setError('You need to be signed in to simulate a meal.')
-      return
-    }
-    setError(null)
-    setSimulation(null)
-    setIsSimulating(true)
-    try {
-      setSimulation(await simulateMeal(text.trim(), user.id))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not estimate that meal.')
-    } finally {
-      setIsSimulating(false)
-    }
-  }
-
-  // Commit the simulated numbers exactly as previewed — no re-estimate.
-  async function handleAddSimulation() {
-    if (!simulation || !user) return
-    setError(null)
-    setIsAdding(true)
-    try {
-      await saveEstimateToDiary(simulation, user.id, queryClient, date)
-      router.back()
-    } catch {
-      setError('Could not add that to your diary — is the backend running?')
-    } finally {
-      setIsAdding(false)
-    }
   }
 
   return (
@@ -123,6 +83,11 @@ export default function LogFoodScreen() {
 
           <View style={styles.seams}>
             <Text style={styles.seamsHeading}>More ways to log</Text>
+            <Button
+              label="Simulate first"
+              variant="secondary"
+              onPress={() => router.push({ pathname: '/simulate', params: { date } })}
+            />
             <Button
               label="Scan barcode"
               variant="secondary"

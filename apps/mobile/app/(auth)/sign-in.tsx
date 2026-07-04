@@ -1,10 +1,11 @@
 import * as AppleAuthentication from 'expo-apple-authentication'
 import * as Crypto from 'expo-crypto'
+import { StatusBar } from 'expo-status-bar'
 import { signInWithApple } from '@workout/supabase'
 import { useEffect, useState } from 'react'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { ImageBackground, Pressable, StyleSheet, Text, View } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 
-import { Screen } from '@/components/Screen'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/providers/auth'
 
@@ -65,32 +66,46 @@ export default function SignInScreen() {
   }
 
   return (
-    <Screen style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>exFat</Text>
-        <Text style={styles.subtitle}>Track what you eat. No ads. Ever.</Text>
-      </View>
+    <ImageBackground
+      source={require('../../assets/images/fuji-tea.webp')}
+      resizeMode="cover"
+      style={styles.background}
+    >
+      {/* Darken the photo so the light title and footer stay legible over the
+          bright sky and tea fields. */}
+      <View style={styles.scrim} />
+      <StatusBar style="light" />
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.content}>
+          <View style={styles.header}>
+            <Text style={styles.title}>exFat</Text>
+            <Text style={styles.subtitle}>Track what you eat. No ads. Ever.</Text>
+          </View>
 
-      <View style={styles.footer}>
-        {isAppleAvailable ? (
-          <AppleAuthentication.AppleAuthenticationButton
-            buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-            buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-            cornerRadius={12}
-            style={styles.appleButton}
-            onPress={handleSignIn}
-          />
-        ) : (
-          <Text style={styles.unavailable}>Apple sign-in is not available on this device.</Text>
-        )}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        {__DEV__ ? (
-          <Pressable onPress={devSignIn} style={styles.devSkip}>
-            <Text style={styles.devSkipText}>Skip sign-in (dev preview)</Text>
-          </Pressable>
-        ) : null}
-      </View>
-    </Screen>
+          <View style={styles.footer}>
+            {isAppleAvailable ? (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+                cornerRadius={12}
+                style={styles.appleButton}
+                onPress={handleSignIn}
+              />
+            ) : (
+              <Text style={styles.unavailable}>
+                Apple sign-in is not available on this device.
+              </Text>
+            )}
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {__DEV__ ? (
+              <Pressable onPress={devSignIn} style={styles.devSkip}>
+                <Text style={styles.devSkipText}>Skip sign-in (dev preview)</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+      </SafeAreaView>
+    </ImageBackground>
   )
 }
 
@@ -99,8 +114,21 @@ function isCanceled(e: unknown): boolean {
 }
 
 const styles = StyleSheet.create({
-  container: {
+  background: {
+    flex: 1,
+    backgroundColor: '#0B1E2D',
+  },
+  scrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.32)',
+  },
+  safe: {
+    flex: 1,
+  },
+  content: {
+    flex: 1,
     justifyContent: 'space-between',
+    paddingHorizontal: 24,
     paddingVertical: 64,
   },
   header: {
@@ -111,11 +139,17 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 40,
     fontWeight: '800',
-    color: '#111',
+    color: '#fff',
+    textShadowColor: 'rgba(0, 0, 0, 0.4)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 8,
   },
   subtitle: {
     fontSize: 17,
-    color: '#666',
+    color: 'rgba(255, 255, 255, 0.9)',
+    textShadowColor: 'rgba(0, 0, 0, 0.4)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 8,
   },
   footer: {
     gap: 16,
@@ -125,18 +159,18 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   unavailable: {
-    color: '#666',
+    color: 'rgba(255, 255, 255, 0.9)',
     textAlign: 'center',
   },
   error: {
-    color: '#d00',
+    color: '#FFB4B4',
     textAlign: 'center',
   },
   devSkip: {
     paddingVertical: 8,
   },
   devSkipText: {
-    color: '#999',
+    color: 'rgba(255, 255, 255, 0.85)',
     textAlign: 'center',
     fontSize: 14,
     textDecorationLine: 'underline',

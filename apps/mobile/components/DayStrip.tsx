@@ -174,17 +174,22 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#BBB',
+    color: 'rgba(255, 255, 255, 0.6)',
     // Box around the day of which only the bottom edge is visible: the
     // underline hugs the word, a little wider via the side padding.
     paddingHorizontal: 10,
     paddingBottom: 6,
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
+    // The strip floats directly on the photo (no glass behind it), so a soft
+    // shadow keeps the day labels legible against the bright sky.
+    textShadowColor: 'rgba(0, 0, 0, 0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
   },
   labelSelected: {
     fontWeight: '700',
-    color: '#111',
-    borderBottomColor: '#111',
+    color: '#fff',
+    borderBottomColor: '#fff',
   },
 })

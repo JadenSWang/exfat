@@ -1,6 +1,10 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+# React Native / Metro and the Xcode "Bundle React Native code and images" phase
+# cannot follow pnpm's nested symlink store, so use a flat (npm-like) layout.
+# NOTE: pnpm 11 ignores `node-linker` in .npmrc — it must be set here.
+nodeLinker: hoisted
 allowBuilds:
   unrs-resolver: true
 minimumReleaseAgeExclude:

@@ -181,16 +181,6 @@ export default function DiaryScreen() {
   )
 }
 
-// TEMP preview seed — remove before commit.
-const PREVIEW_ITEMS = [
-  { id: 'p1', name: 'Scrambled eggs', meal: 'breakfast', quantity: 2, unit: 'egg', calories: 180, protein: 12, carbs: 2, fat: 13, source: 'manual' },
-  { id: 'p2', name: 'Greek yogurt', meal: 'breakfast', quantity: 1, unit: 'cup', calories: 150, protein: 17, carbs: 9, fat: 4, source: 'barcode' },
-  { id: 'p3', name: 'Grilled chicken breast', meal: 'lunch', quantity: 6, unit: 'oz', calories: 280, protein: 52, carbs: 0, fat: 6, source: 'ai_estimate' },
-  { id: 'p4', name: 'Brown rice', meal: 'lunch', quantity: 1, unit: 'cup', calories: 216, protein: 5, carbs: 45, fat: 2, source: 'ai_estimate' },
-  { id: 'p5', name: 'Salmon fillet', meal: 'dinner', quantity: 5, unit: 'oz', calories: 300, protein: 40, carbs: 0, fat: 15, source: 'ai_estimate' },
-  { id: 'p6', name: 'Almonds', meal: 'snack', quantity: 1, unit: 'oz', calories: 164, protein: 6, carbs: 6, fat: 14, source: 'manual' },
-] as DiaryItem[]
-
 /** One swipeable day: its own scroll view of that day's summary and meals. */
 function DayPage({
   date,
@@ -203,8 +193,7 @@ function DayPage({
   width: number
   pendingLogs: PendingLog[]
 }) {
-  const { goals, items: fetchedItems } = useDiaryDay(date)
-  const items = date === today && fetchedItems.length === 0 ? PREVIEW_ITEMS : fetchedItems
+  const { goals, items } = useDiaryDay(date)
   const { height: windowHeight } = useWindowDimensions()
   const isToday = date === today
   // In-flight logs render on the day they'll land on, not just today.

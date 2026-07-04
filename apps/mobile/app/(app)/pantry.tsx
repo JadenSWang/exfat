@@ -10,6 +10,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native'
 
@@ -145,6 +146,39 @@ export default function PantryScreen() {
   }
 
   const [isSaving, setIsSaving] = useState(false)
+
+  // Manual quick-add: free-text names, comma-separated for several at once
+  // ("eggs, milk, leftover rice"). No AI round-trip — pantry items are just
+  // names, and the coach reads free text fine at planning time.
+  const [manualText, setManualText] = useState('')
+  const [isAdding, setIsAdding] = useState(false)
+
+  async function addManual() {
+    if (!user) {
+      setError('You need to be signed in to save your pantry.')
+      return
+    }
+    const names = manualText
+      .split(/[,\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (names.length === 0) return
+    setError(null)
+    setIsAdding(true)
+    try {
+      await addPantryItems(
+        supabase,
+        user.id,
+        names.map((name) => ({ name, source: 'manual' as const })),
+      )
+      setManualText('')
+      await queryClient.invalidateQueries({ queryKey: ['pantry', user.id] })
+    } catch {
+      setError('Could not save to your pantry — is the backend running?')
+    } finally {
+      setIsAdding(false)
+    }
+  }
 
   async function saveReviewed(reviewItems: ReceiptItem[], excluded: Set<number>) {
     if (!user) {
@@ -282,6 +316,34 @@ export default function PantryScreen() {
             />
           </View>
         </View>
+        <View style={styles.manualRow}>
+          <TextInput
+            style={styles.manualInput}
+            value={manualText}
+            onChangeText={setManualText}
+            placeholder="Or type it — eggs, milk, rice…"
+            placeholderTextColor="#AAA"
+            onSubmitEditing={addManual}
+            returnKeyType="done"
+          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Add to pantry"
+            disabled={!manualText.trim() || isAdding}
+            onPress={addManual}
+            style={({ pressed }) => [
+              styles.manualButton,
+              (!manualText.trim() || isAdding) && styles.manualButtonDisabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            {isAdding ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.manualButtonLabel}>+</Text>
+            )}
+          </Pressable>
+        </View>
         {permission?.canAskAgain === false && !permission.granted ? (
           <Text style={styles.error}>Camera access is off — enable it in Settings to scan.</Text>
         ) : null}
@@ -351,6 +413,38 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     flex: 1,
+  },
+  manualRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  manualInput: {
+    flex: 1,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E4E4E9',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: '#111',
+  },
+  manualButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#208AEF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manualButtonDisabled: {
+    backgroundColor: '#B9D9F7',
+  },
+  manualButtonLabel: {
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: '300',
+    lineHeight: 26,
   },
   loader: {
     marginTop: 32,

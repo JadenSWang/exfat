@@ -1,6 +1,7 @@
 import type { FoodUnit } from '@workout/core'
 import type { Tables } from '@workout/supabase'
 import {
+  addPantryItems,
   logDiaryEntries,
   lookupBarcode,
   saveCorrectedFood,
@@ -122,10 +123,14 @@ export default function ScanBarcodeScreen() {
   // entry keeps its logged quantity/unit; macros are rescaled to it.
   const params = useLocalSearchParams<{
     date?: string
+    mode?: string
     refineEntryId?: string
     refineQty?: string
     refineUnit?: string
   }>()
+  // Pantry mode ("scan your groceries"): each barcode is added straight to the
+  // pantry and the camera re-arms for the next product — no confirm step.
+  const pantryMode = params.mode === 'pantry'
   const refine = params.refineEntryId
     ? {
         entryId: params.refineEntryId,
@@ -144,7 +149,41 @@ export default function ScanBarcodeScreen() {
   // Imperative handle for the still-capture camera used to photograph a label.
   const cameraRef = useRef<CameraView>(null)
 
+  // Pantry multi-scan: how many products were added, and the transient banner
+  // confirming the latest one.
+  const [addedCount, setAddedCount] = useState(0)
+  const [banner, setBanner] = useState<string | null>(null)
+
+  // Add the scanned product to the pantry and re-arm the camera after a short
+  // debounce (so a barcode still in frame isn't added twice). Never leaves the
+  // scanning phase — the flow is scan, toast, keep scanning.
+  async function handleScannedForPantry(barcode: string) {
+    if (handledRef.current) return
+    handledRef.current = true
+    setError(null)
+    try {
+      const result = await lookupBarcode(supabase, barcode)
+      if (result.found && result.food && user) {
+        const { food } = result
+        await addPantryItems(supabase, user.id, [
+          { name: food.name, brand: food.brand, foodId: food.id, source: 'barcode' },
+        ])
+        setAddedCount((n) => n + 1)
+        setBanner(`Added ${food.brand ? `${food.brand} ` : ''}${food.name}`)
+        void queryClient.invalidateQueries({ queryKey: ['pantry'] })
+      } else {
+        setBanner("Couldn't identify that product — skipped")
+      }
+    } catch {
+      setBanner('Could not look that up — check your connection')
+    }
+    setTimeout(() => {
+      handledRef.current = false
+    }, 1500)
+  }
+
   async function handleScanned(barcode: string) {
+    if (pantryMode) return handleScannedForPantry(barcode)
     if (handledRef.current) return
     handledRef.current = true
     setError(null)
@@ -286,10 +325,22 @@ export default function ScanBarcodeScreen() {
           onBarcodeScanned={({ data }) => handleScanned(data)}
         />
         <View style={styles.cameraOverlay}>
+          {pantryMode && banner ? <Text style={styles.cameraBanner}>{banner}</Text> : null}
           <Text style={styles.cameraHint}>
-            {refine ? 'Scan the barcode to replace the estimate' : 'Point at a food barcode'}
+            {pantryMode
+              ? 'Scan your groceries — each one goes into your pantry'
+              : refine
+                ? 'Scan the barcode to replace the estimate'
+                : 'Point at a food barcode'}
           </Text>
           {error ? <Text style={styles.cameraError}>{error}</Text> : null}
+          {pantryMode ? (
+            <Pressable accessibilityRole="button" onPress={() => router.back()}>
+              <Text style={styles.cameraCancel}>
+                {addedCount > 0 ? `Done — added ${addedCount}` : 'Done'}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
     )
@@ -690,6 +741,16 @@ const styles = StyleSheet.create({
   lookupSubtitle: {
     fontSize: 14,
     color: '#999',
+  },
+  cameraBanner: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    backgroundColor: 'rgba(52,199,89,0.85)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    overflow: 'hidden',
   },
   cameraError: {
     color: '#FFB4B4',

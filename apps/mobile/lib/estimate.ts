@@ -19,9 +19,9 @@ const DEFAULT_ESTIMATE_URL = 'http://100.64.0.62:8787/estimate'
 const ESTIMATE_URL = process.env.EXPO_PUBLIC_ESTIMATE_URL ?? DEFAULT_ESTIMATE_URL
 const ESTIMATE_TOKEN = process.env.EXPO_PUBLIC_ESTIMATE_TOKEN
 
-// The estimator's non-/estimate routes (e.g. /label/jobs) hang off the host
-// root, so strip the trailing /estimate from the configured URL.
-const ESTIMATOR_BASE = ESTIMATE_URL.replace(/\/estimate$/, '')
+// The estimator's non-/estimate routes (e.g. /label/jobs, /chat/jobs) hang off
+// the host root, so strip the trailing /estimate from the configured URL.
+export const ESTIMATOR_BASE = ESTIMATE_URL.replace(/\/estimate$/, '')
 
 /**
  * Estimate nutrition for a free-text meal description via the paseo estimator.
@@ -48,7 +48,7 @@ export interface EstimateJobStatus {
   error?: string
 }
 
-function authHeaders(): Record<string, string> {
+export function authHeaders(): Record<string, string> {
   return ESTIMATE_TOKEN ? { 'x-exfat-token': ESTIMATE_TOKEN } : {}
 }
 
@@ -144,4 +144,50 @@ export async function getLabelJob(id: string): Promise<LabelJobStatus> {
     throw new Error(`Estimator responded ${res.status}`)
   }
   return (await res.json()) as LabelJobStatus
+}
+
+/**
+ * One food item read off a photographed grocery receipt. Shape matches the
+ * estimator's `shapeReceipt`.
+ */
+export interface ReceiptItem {
+  name: string
+  brand: string | null
+  confidence: number
+}
+
+export interface ReceiptJobStatus {
+  status: 'pending' | 'done' | 'error'
+  result?: { items: ReceiptItem[] }
+  error?: string
+}
+
+/**
+ * Kick off a receipt-scan job: a paseo agent reads the photographed grocery
+ * receipt and extracts the food items (for the pantry). Returns a job id to
+ * poll via {@link getReceiptJob}. `image` is base64-encoded (no data-URI prefix).
+ */
+export async function startReceiptScanJob(image: string, mime = 'image/jpeg'): Promise<string> {
+  const res = await fetch(`${ESTIMATOR_BASE}/receipt/jobs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ image, mime }),
+  })
+  if (!res.ok) {
+    throw new Error(`Estimator responded ${res.status}`)
+  }
+  const { id } = (await res.json()) as { id: string }
+  return id
+}
+
+/** Poll a job started with {@link startReceiptScanJob}. */
+export async function getReceiptJob(id: string): Promise<ReceiptJobStatus> {
+  const res = await fetch(`${ESTIMATOR_BASE}/receipt/jobs/${id}`, { headers: authHeaders() })
+  if (res.status === 404) {
+    throw new EstimateJobLostError(id)
+  }
+  if (!res.ok) {
+    throw new Error(`Estimator responded ${res.status}`)
+  }
+  return (await res.json()) as ReceiptJobStatus
 }

@@ -216,6 +216,11 @@ function settleJob(id, patch) {
     rmSync(job.imagePath, { force: true })
     job.imagePath = null
   }
+  // Chat agents write their reply to chat-<id>.json in WORKDIR before POSTing
+  // it back; clear it so these don't accumulate.
+  if (job.kind === 'chat') {
+    rmSync(`${WORKDIR}/chat-${id}.json`, { force: true })
+  }
   for (const waiter of job.waiters) waiter(job)
   job.waiters = []
   return true
@@ -320,6 +325,142 @@ function startEstimate(text, userId) {
 }
 
 // ---------------------------------------------------------------------------
+// AI helper chat. The app's "AI helper" action talks to a paseo agent acting as
+// a nutrition coach. Same job/callback machinery as estimates, but the agent
+// returns free-form reply text (not structured items), and — when we know the
+// user — is given their day's goals and totals so answers can be personalized.
+// ---------------------------------------------------------------------------
+
+function todayLocal() {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+// One day's diary for a user: goals, entries, and running totals. Shared by the
+// inline chat context and the coach's `diary` read-tool. Throws on REST failure.
+async function diaryForUserDay(userId, date) {
+  const [goalsRows, entryRows] = await Promise.all([
+    supabaseRest(`nutrition_goals?user_id=eq.${userId}&select=calories,protein,carbs,fat&limit=1`),
+    supabaseRest(
+      `diary_entries?user_id=eq.${userId}&entry_date=eq.${date}` +
+        `&select=meal,description,quantity,unit,calories,protein,carbs,fat&order=created_at.asc`,
+    ),
+  ])
+  const goals = goalsRows[0] ?? null
+  const totals = entryRows.reduce(
+    (a, r) => ({
+      calories: a.calories + num(r.calories),
+      protein: a.protein + num(r.protein),
+      carbs: a.carbs + num(r.carbs),
+      fat: a.fat + num(r.fat),
+    }),
+    { calories: 0, protein: 0, carbs: 0, fat: 0 },
+  )
+  return { date, goals, totals, count: entryRows.length, entries: entryRows }
+}
+
+// The user's active pantry (what food they have at home), newest first. Backs
+// the coach's `pantry` read-tool. Throws on REST failure.
+async function pantryForUser(userId) {
+  const rows = await supabaseRest(
+    `pantry_items?user_id=eq.${userId}&consumed_at=is.null` +
+      `&select=name,brand,added_at&order=added_at.desc&limit=100`,
+  )
+  return {
+    items: rows.map((r) => ({ name: r.name, brand: r.brand, addedAt: r.added_at })),
+  }
+}
+
+// Ground the coach with the day's goals/totals. Best-effort: any failure (or no
+// backend) returns null and the coach simply answers without personal context.
+async function fetchUserContext(userId, date) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || !userId) return null
+  try {
+    return await diaryForUserDay(userId, date)
+  } catch (e) {
+    console.warn('[chat] user context failed:', e.message)
+    return null
+  }
+}
+
+function buildChatPrompt(messages, context, jobId, canQuery, date) {
+  const callback = `http://127.0.0.1:${PORT}/internal/jobs/${jobId}/result`
+  const diary = `http://127.0.0.1:${PORT}/internal/jobs/${jobId}/diary`
+  const search = `http://127.0.0.1:${PORT}/internal/jobs/${jobId}/search`
+  const pantry = `http://127.0.0.1:${PORT}/internal/jobs/${jobId}/pantry`
+  const file = `chat-${jobId}.json`
+
+  let contextBlock = `\nToday is ${date}.\n`
+  if (context && context.goals) {
+    const g = context.goals
+    const t = context.totals
+    contextBlock +=
+      `The user's day so far (context — only mention if relevant to the question):\n` +
+      `- Eaten today: ${Math.round(t.calories)} kcal, ${Math.round(t.protein)}g protein, ` +
+      `${Math.round(t.carbs)}g carbs, ${Math.round(t.fat)}g fat across ${context.count} item(s).\n` +
+      `- Daily goals: ${Math.round(g.calories)} kcal, ${Math.round(g.protein)}g protein, ` +
+      `${Math.round(g.carbs)}g carbs, ${Math.round(g.fat)}g fat.\n`
+  }
+
+  // Read-only tools the agent can curl before answering. Both are localhost,
+  // scoped to this job's user by the unguessable job id.
+  const toolsSection = canQuery
+    ? `
+You have three READ-ONLY tools to ground answers in the user's real data. Call them (before replying) only when the question is about their own diary, progress, the foods they eat, or what they should cook — skip them for general nutrition questions.
+
+- Their diary for a day — goals, entries, and running totals:
+  curl -fsS '${diary}?date=YYYY-MM-DD'   (omit ?date for today; today's snapshot is already given above, so use this mainly for OTHER days or per-item detail)
+  Returns {"date","goals":{calories,protein,carbs,fat}|null,"totals":{calories,protein,carbs,fat},"count",entries:[{meal,description,quantity,unit,calories,protein,carbs,fat}]}.
+
+- Foods the user has logged or scanned before:
+  curl -fsS '${search}?q=<term>'
+  Returns {"results":[{id,name,brand,servingQty,servingUnit,calories,protein,carbs,fat,recent}]} — macros per serving; "recent":true means they logged it lately. Search at most a couple of terms.
+
+- What food the user has at home (their pantry):
+  curl -fsS '${pantry}'
+  Returns {"items":[{name,brand,addedAt}]}, newest purchases first. Use this whenever the user asks what to cook, for meal ideas, or for a meal plan — prefer meals built from what they already have, and call out anything they'd still need to buy. An empty list just means they haven't captured a pantry; suggest normally.
+
+These are read-only: you cannot log food or change the app. If the user wants to log a meal, point them to the app's "Log food" button.
+`
+    : `
+You cannot log food or change the app yourself — if the user wants to log a meal, point them to the app's "Log food" button.
+`
+
+  const transcript = messages
+    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+    .join('\n')
+
+  return `You are the in-app AI nutrition coach for exFat, a calorie and macro tracking app. Be warm, concise, and practical. Prefer short replies (2-5 sentences) with specific, actionable guidance.
+${contextBlock}${toolsSection}
+Conversation so far:
+${transcript}
+
+Write a reply to the LAST user message. Delivering it is a two-step process, and this is your ONLY output channel (printing text does nothing):
+
+1. Use your Write tool to create a file named ${file} in the current directory containing exactly this JSON, with your reply as the value (properly JSON-escaped):
+{"reply": "your reply here"}
+
+2. Then run exactly:
+curl -fsS -X POST '${callback}' -H 'content-type: application/json' -d @${file}
+
+After the curl succeeds, stop. Do not do anything else.`
+}
+
+function startChat(messages, userId, date) {
+  const jobId = createJob(userId, 'chat')
+  const canQuery = Boolean(SUPABASE_URL && SUPABASE_SERVICE_KEY && userId)
+  // Fetch context, then launch — both on the serialized chain so a burst of
+  // chats doesn't cold-start several workspaces at once.
+  enqueue(async () => {
+    const context = await fetchUserContext(userId, date)
+    const prompt = buildChatPrompt(messages, context, jobId, canQuery, date)
+    return launchWithHeal(prompt, jobId)
+  }).catch((e) => failJob(jobId, e.message))
+  return jobId
+}
+
+// ---------------------------------------------------------------------------
 // Label OCR jobs. The app photographs a Nutrition Facts panel when a scanned
 // barcode's numbers look wrong; a paseo agent Reads the image (its Read tool is
 // natively multimodal — no vision API needed) and POSTs the per-serving facts
@@ -370,6 +511,58 @@ function startLabel(imagePath) {
   const prompt = buildLabelPrompt(imagePath, jobId)
   enqueue(() => launchWithHeal(prompt, jobId)).catch((e) => failJob(jobId, e.message))
   return jobId
+}
+
+// ---------------------------------------------------------------------------
+// Receipt scan jobs. After a shopping trip the app photographs the grocery
+// receipt; a paseo agent Reads the image and extracts the food items (expanding
+// cryptic register abbreviations) so they can be added to the user's pantry.
+// ---------------------------------------------------------------------------
+
+function buildReceiptPrompt(imagePath, jobId) {
+  const callback = `http://127.0.0.1:${PORT}/internal/jobs/${jobId}/result`
+  return `You are reading a grocery-store receipt from a photo.
+
+Use your Read tool to open the image file at:
+${imagePath}
+
+Extract only the FOOD and DRINK items the person bought. Skip everything else:
+tax, totals, coupons, bags, household goods, toiletries, paper products, pet
+food, and any line you cannot identify as food.
+
+Receipt lines are cryptic register abbreviations — expand each into the plain
+food name a person would say (e.g. "GV SHRD CHDR 8Z" -> "shredded cheddar
+cheese"). Include the brand when identifiable (e.g. "GV" -> "Great Value"),
+otherwise use null. A line bought multiple times still yields one item.
+
+Deliver the result by POSTing JSON to a local callback endpoint. This is your ONLY output channel — printing the JSON does nothing. Run exactly one command shaped like:
+
+curl -fsS -X POST '${callback}' -H 'content-type: application/json' -d '{"items":[{"name":"shredded cheddar cheese","brand":"Great Value","confidence":0.9}]}'
+
+Rules:
+- "name" is the plain food name (lowercase is fine); "brand" is a string or null.
+- "confidence" is 0..1 — how sure you are the line is that food.
+- If the photo is not a readable receipt, POST {"items":[],"error":"<short reason>"} instead.
+- After the curl succeeds, stop. Do not do anything else.`
+}
+
+function startReceipt(imagePath) {
+  const jobId = createJob(null, 'receipt')
+  jobs.get(jobId).imagePath = imagePath
+  const prompt = buildReceiptPrompt(imagePath, jobId)
+  enqueue(() => launchWithHeal(prompt, jobId)).catch((e) => failJob(jobId, e.message))
+  return jobId
+}
+
+// Coerce the agent's raw receipt items into the shape the app expects.
+function shapeReceipt(rawItems) {
+  return rawItems
+    .map((it) => ({
+      name: String(it.name ?? '').trim(),
+      brand: typeof it.brand === 'string' && it.brand.trim() ? it.brand.trim() : null,
+      confidence: Math.min(1, Math.max(0, num(it.confidence))),
+    }))
+    .filter((it) => it.name)
 }
 
 // Janitor: hard-delete finished estimator agents (they run in WORKDIR). The
@@ -495,6 +688,24 @@ const server = createServer((req, res) => {
         }
         return send(res, 200, { ok: true })
       }
+      if (job.kind === 'chat') {
+        const reply = typeof body.reply === 'string' ? body.reply.trim() : ''
+        if (!reply) {
+          failJob(cbMatch[1], body.error ?? 'The assistant had no response.')
+        } else {
+          completeJob(cbMatch[1], { reply })
+        }
+        return send(res, 200, { ok: true })
+      }
+      if (job.kind === 'receipt') {
+        const items = Array.isArray(body.items) ? shapeReceipt(body.items) : []
+        if (items.length === 0) {
+          failJob(cbMatch[1], body.error ?? 'Could not read any food items off that receipt.')
+        } else {
+          completeJob(cbMatch[1], { items })
+        }
+        return send(res, 200, { ok: true })
+      }
       if (!Array.isArray(body.items)) return send(res, 400, { error: 'missing items[]' })
       if (body.items.length === 0) {
         failJob(cbMatch[1], body.error ?? 'The estimator could not process that meal.')
@@ -523,7 +734,49 @@ const server = createServer((req, res) => {
       })
   }
 
-  const jobMatch = req.url?.match(/^\/(?:estimate|label)\/jobs\/([\w-]+)$/)
+  // Agent diary read-tool (chat coach). Localhost-only, scoped to a live job so
+  // the agent can only read the diary of the user who submitted that job.
+  const diaryMatch = req.url?.match(/^\/internal\/jobs\/([\w-]+)\/diary(?:\?(.*))?$/)
+  if (req.method === 'GET' && diaryMatch) {
+    if (req.socket.remoteAddress !== '127.0.0.1' && req.socket.remoteAddress !== '::ffff:127.0.0.1') {
+      return send(res, 403, { error: 'diary is localhost-only' })
+    }
+    const job = jobs.get(diaryMatch[1])
+    if (!job) return send(res, 404, { error: 'unknown job' })
+    if (!job.userId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+      return send(res, 200, { error: 'no diary access configured' })
+    }
+    const rawDate = new URLSearchParams(diaryMatch[2] ?? '').get('date') ?? ''
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : todayLocal()
+    return diaryForUserDay(job.userId, date)
+      .then((day) => send(res, 200, day))
+      .catch((e) => {
+        console.error('[chat] diary tool failed:', e.message)
+        send(res, 200, { error: 'could not read diary' })
+      })
+  }
+
+  // Agent pantry read-tool (chat coach). Localhost-only, scoped to a live job so
+  // the agent can only read the pantry of the user who submitted that job.
+  const pantryMatch = req.url?.match(/^\/internal\/jobs\/([\w-]+)\/pantry$/)
+  if (req.method === 'GET' && pantryMatch) {
+    if (req.socket.remoteAddress !== '127.0.0.1' && req.socket.remoteAddress !== '::ffff:127.0.0.1') {
+      return send(res, 403, { error: 'pantry is localhost-only' })
+    }
+    const job = jobs.get(pantryMatch[1])
+    if (!job) return send(res, 404, { error: 'unknown job' })
+    if (!job.userId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+      return send(res, 200, { items: [] })
+    }
+    return pantryForUser(job.userId)
+      .then((pantry) => send(res, 200, pantry))
+      .catch((e) => {
+        console.error('[chat] pantry tool failed:', e.message)
+        send(res, 200, { items: [] })
+      })
+  }
+
+  const jobMatch = req.url?.match(/^\/(?:estimate|label|chat|receipt)\/jobs\/([\w-]+)$/)
   if (req.method === 'GET' && jobMatch) {
     if (!authorized(req)) return send(res, 401, { error: 'unauthorized' })
     const job = jobs.get(jobMatch[1])
@@ -557,6 +810,75 @@ const server = createServer((req, res) => {
         return send(res, 202, { id: startLabel(imagePath), status: 'pending' })
       },
       8_000_000,
+    )
+  }
+
+  // Receipt scan: base64 photo of a grocery receipt in, async job out (poll via
+  // GET /receipt/jobs/:id). Same image handling and body cap as label OCR.
+  if (req.method === 'POST' && req.url === '/receipt/jobs') {
+    if (!authorized(req)) return send(res, 401, { error: 'unauthorized' })
+    return readBody(
+      req,
+      (raw) => {
+        let image
+        let mime
+        try {
+          const body = JSON.parse(raw)
+          image = String(body.image ?? '')
+          mime = typeof body.mime === 'string' ? body.mime : 'image/jpeg'
+        } catch {
+          return send(res, 400, { error: 'invalid JSON body' })
+        }
+        if (!image) return send(res, 400, { error: 'missing "image"' })
+        let imagePath
+        try {
+          imagePath = writeLabelImage(image, mime)
+        } catch (e) {
+          return send(res, 400, { error: `could not decode image: ${e.message}` })
+        }
+        return send(res, 202, { id: startReceipt(imagePath), status: 'pending' })
+      },
+      8_000_000,
+    )
+  }
+
+  // AI helper chat: a conversation in, the coach's reply out (poll via
+  // GET /chat/jobs/:id). Bigger body cap than a single meal since it carries the
+  // running transcript.
+  if (req.method === 'POST' && req.url === '/chat/jobs') {
+    if (!authorized(req)) return send(res, 401, { error: 'unauthorized' })
+    return readBody(
+      req,
+      (raw) => {
+        let messages
+        let userId = null
+        let date = todayLocal()
+        try {
+          const body = JSON.parse(raw)
+          messages = Array.isArray(body.messages) ? body.messages : null
+          const rawUser = String(body.userId ?? '')
+          userId = /^[0-9a-f-]{36}$/i.test(rawUser) ? rawUser : null
+          const rawDate = String(body.date ?? '')
+          if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) date = rawDate
+        } catch {
+          return send(res, 400, { error: 'invalid JSON body' })
+        }
+        // Keep only well-formed turns, bound each turn's size, and cap history
+        // so the prompt stays small.
+        const clean = (messages ?? [])
+          .filter(
+            (m) =>
+              m &&
+              (m.role === 'user' || m.role === 'assistant') &&
+              typeof m.content === 'string' &&
+              m.content.trim(),
+          )
+          .map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000) }))
+          .slice(-12)
+        if (clean.length === 0) return send(res, 400, { error: 'missing "messages"' })
+        return send(res, 202, { id: startChat(clean, userId, date), status: 'pending' })
+      },
+      200_000,
     )
   }
 

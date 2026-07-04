@@ -419,6 +419,54 @@ export type Database = {
           },
         ]
       }
+      pantry_items: {
+        Row: {
+          id: string
+          user_id: string
+          name: string
+          brand: string | null
+          food_id: string | null
+          source: 'receipt' | 'barcode' | 'manual'
+          added_at: string
+          consumed_at: string | null
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          name: string
+          brand?: string | null
+          food_id?: string | null
+          source?: 'receipt' | 'barcode' | 'manual'
+          added_at?: string
+          consumed_at?: string | null
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          name?: string
+          brand?: string | null
+          food_id?: string | null
+          source?: 'receipt' | 'barcode' | 'manual'
+          added_at?: string
+          consumed_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'pantry_items_user_id_fkey'
+            columns: ['user_id']
+            isOneToOne: false
+            referencedRelation: 'users'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'pantry_items_food_id_fkey'
+            columns: ['food_id']
+            isOneToOne: false
+            referencedRelation: 'foods'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       nutrition_goals: {
         Row: {
           user_id: string

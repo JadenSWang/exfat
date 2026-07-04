@@ -32,6 +32,14 @@ export {
 } from './nutrition'
 
 export {
+  getPantryItems,
+  addPantryItems,
+  consumePantryItem,
+  type PantryItemInput,
+  type PantrySource,
+} from './pantry'
+
+export {
   lookupBarcode,
   submitBarcodeFood,
   saveCorrectedFood,
